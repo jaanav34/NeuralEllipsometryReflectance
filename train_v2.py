@@ -1,6 +1,6 @@
 """
 Train SpectraNetV2: improved architecture with BatchNorm, residual connection,
-and a physics-informed loss that re-simulates spectra from predicted parameters.
+and consistency regularization via input perturbation.
 """
 
 import numpy as np
@@ -8,14 +8,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 import matplotlib.pyplot as plt
+import time
 
-from tmm_simulator import simulate_reflectance_batch
 
 # ──────────────────────────────────────────────
 # 1. Data loading and preprocessing
 # ──────────────────────────────────────────────
-
-WAVELENGTHS = np.linspace(400, 800, 200)
 
 data = np.load("dataset.npz")
 X_all = data["X"].astype(np.float32)  # (100000, 200)
@@ -39,34 +37,32 @@ train_idx = indices[:n_train]
 val_idx = indices[n_train:n_train + n_val]
 test_idx = indices[n_train + n_val:]
 
-X_train_raw, y_train = X_all[train_idx], y_all[train_idx]
-X_val_raw, y_val = X_all[val_idx], y_all[val_idx]
-X_test_raw, y_test = X_all[test_idx], y_all[test_idx]
+X_train, y_train = X_all[train_idx], y_all[train_idx]
+X_val, y_val = X_all[val_idx], y_all[val_idx]
+X_test, y_test = X_all[test_idx], y_all[test_idx]
 
 # Normalize spectra: zero mean, unit variance (fit on train only)
-X_mean = X_train_raw.mean(axis=0)
-X_std = X_train_raw.std(axis=0)
+X_mean = X_train.mean(axis=0)
+X_std = X_train.std(axis=0)
 X_std[X_std < 1e-8] = 1.0
 
-X_train_norm = (X_train_raw - X_mean) / X_std
-X_val_norm = (X_val_raw - X_mean) / X_std
-X_test_norm = (X_test_raw - X_mean) / X_std
+X_train = (X_train - X_mean) / X_std
+X_val = (X_val - X_mean) / X_std
+X_test = (X_test - X_mean) / X_std
 
 # Normalize parameters to [0, 1]
 y_train_norm = (y_train - param_min) / param_range
 y_val_norm = (y_val - param_min) / param_range
 y_test_norm = (y_test - param_min) / param_range
 
-# DataLoaders — include raw spectra as third element for physics loss
+# DataLoaders
 BATCH_SIZE = 512
 
-train_ds = TensorDataset(torch.from_numpy(X_train_norm),
-                         torch.from_numpy(y_train_norm),
-                         torch.from_numpy(X_train_raw))
-val_ds = TensorDataset(torch.from_numpy(X_val_norm),
-                       torch.from_numpy(y_val_norm),
-                       torch.from_numpy(X_val_raw))
-test_ds = TensorDataset(torch.from_numpy(X_test_norm),
+train_ds = TensorDataset(torch.from_numpy(X_train),
+                         torch.from_numpy(y_train_norm))
+val_ds = TensorDataset(torch.from_numpy(X_val),
+                       torch.from_numpy(y_val_norm))
+test_ds = TensorDataset(torch.from_numpy(X_test),
                         torch.from_numpy(y_test_norm))
 
 train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
@@ -89,7 +85,7 @@ class SpectraNetV2(nn.Module):
                 nn.Linear(in_dim, h),
                 nn.BatchNorm1d(h),
                 nn.ReLU(),
-                nn.Dropout(0.15),
+                nn.Dropout(0.25),
             ])
             in_dim = h
         self.trunk = nn.Sequential(*layers)
@@ -117,42 +113,10 @@ print(f"Training on {device}")
 print(f"SpectraNetV2 parameters: {sum(p.numel() for p in model.parameters()):,}")
 
 # ──────────────────────────────────────────────
-# 3. Physics-informed loss helper
+# 3. Training loop with consistency regularization
 # ──────────────────────────────────────────────
 
-LAMBDA_PHYSICS = 0.1
-
-# Torch tensors for denormalization (on device)
-t_param_min = torch.from_numpy(param_min).to(device)
-t_param_range = torch.from_numpy(param_range).to(device)
-
-
-def compute_physics_loss(pred_norm, raw_spectra):
-    """
-    Denormalize predicted params, re-simulate spectra via vectorized TMM,
-    and return MSE vs the original (raw, unnormalized) input spectra.
-
-    Both pred_norm and raw_spectra are detached for the numpy TMM call.
-    The returned loss is a plain tensor (no grad) used as a regularizer.
-    """
-    # Denormalize predictions to physical units
-    pred_phys = pred_norm.detach().cpu().numpy() * param_range + param_min
-
-    # Re-simulate all spectra in one vectorized call — no Python loop
-    re_simulated = simulate_reflectance_batch(
-        pred_phys[:, 0], pred_phys[:, 1], pred_phys[:, 2], WAVELENGTHS
-    ).astype(np.float32)
-
-    # MSE between re-simulated and original raw spectra
-    re_sim_t = torch.from_numpy(re_simulated).to(device)
-    raw_t = raw_spectra.to(device)
-    physics_mse = nn.functional.mse_loss(re_sim_t, raw_t)
-    return physics_mse
-
-
-# ──────────────────────────────────────────────
-# 4. Training loop
-# ──────────────────────────────────────────────
+NOISE_STD = 0.005  # Gaussian noise std for input perturbation
 
 criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -169,37 +133,39 @@ best_val_loss = float("inf")
 epochs_without_improvement = 0
 
 for epoch in range(1, MAX_EPOCHS + 1):
-    # --- Train ---
+    t0 = time.time()
+    # --- Train with consistency regularization ---
     model.train()
     running_loss = 0.0
-    for xb, yb, xb_raw in train_loader:
+    for xb, yb in train_loader:
         xb, yb = xb.to(device), yb.to(device)
-        pred = model(xb)
 
-        # Parameter MSE (differentiable, drives learning)
-        param_loss = criterion(pred, yb)
+        # Prediction on clean input
+        pred_clean = model(xb)
+        loss_clean = criterion(pred_clean, yb)
 
-        # Physics consistency loss (non-differentiable regularizer)
-        physics_loss = compute_physics_loss(pred, xb_raw)
+        # Prediction on noisy input (consistency regularization)
+        noise = torch.randn_like(xb) * NOISE_STD
+        pred_noisy = model(xb + noise)
+        loss_noisy = criterion(pred_noisy, yb)
 
-        loss = param_loss + LAMBDA_PHYSICS * physics_loss
+        # Average both losses
+        loss = 0.5 * (loss_clean + loss_noisy)
 
         optimizer.zero_grad()
-        param_loss.backward()  # only param_loss has gradients
+        loss.backward()
         optimizer.step()
         running_loss += loss.item() * len(xb)
     train_loss = running_loss / len(train_ds)
 
-    # --- Validate ---
+    # --- Validate (clean only) ---
     model.eval()
     running_loss = 0.0
     with torch.no_grad():
-        for xb, yb, xb_raw in val_loader:
+        for xb, yb in val_loader:
             xb, yb = xb.to(device), yb.to(device)
             pred = model(xb)
-            param_loss = criterion(pred, yb)
-            physics_loss = compute_physics_loss(pred, xb_raw)
-            loss = param_loss + LAMBDA_PHYSICS * physics_loss
+            loss = criterion(pred, yb)
             running_loss += loss.item() * len(xb)
     val_loss = running_loss / len(val_ds)
 
@@ -217,9 +183,11 @@ for epoch in range(1, MAX_EPOCHS + 1):
     else:
         epochs_without_improvement += 1
 
+    epoch_time = time.time() - t0
     if epoch % 10 == 0 or epoch == 1 or epochs_without_improvement == 0:
         print(f"Epoch {epoch:3d} | train {train_loss:.6f} | "
-              f"val {val_loss:.6f} | lr {current_lr:.1e}"
+              f"val {val_loss:.6f} | lr {current_lr:.1e} | "
+              f"{epoch_time:.1f}s"
               f"{' *' if epochs_without_improvement == 0 else ''}")
 
     if epochs_without_improvement >= EARLY_STOP_PATIENCE:
@@ -305,7 +273,7 @@ fig, ax = plt.subplots(figsize=(7, 4))
 ax.plot(train_losses, label="Train")
 ax.plot(val_losses, label="Validation")
 ax.set_xlabel("Epoch")
-ax.set_ylabel("Loss (param MSE + 0.1 * physics MSE)")
+ax.set_ylabel("MSE Loss")
 ax.set_title("SpectraNetV2 — Training and Validation Loss")
 ax.legend()
 ax.set_yscale("log")
