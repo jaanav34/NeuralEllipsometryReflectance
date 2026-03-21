@@ -144,6 +144,62 @@ def simulate_reflectance_batch(thicknesses, n_vals, k_vals, wavelengths_nm):
     return np.abs(r) ** 2  # (B, W)
 
 
+def simulate_reflectance_torch(thicknesses, n_vals, k_vals, wavelengths):
+    """
+    Differentiable TMM in pure PyTorch — gradients flow through all inputs.
+
+    Implements the same Transfer Matrix Method as the numpy versions but
+    using PyTorch complex tensors so autograd can compute d(reflectance)/d(params).
+
+    Parameters
+    ----------
+    thicknesses : torch.Tensor, shape (B,)
+        Film thicknesses in nanometers. May require grad.
+    n_vals : torch.Tensor, shape (B,)
+        Refractive indices (real part). May require grad.
+    k_vals : torch.Tensor, shape (B,)
+        Extinction coefficients. May require grad.
+    wavelengths : torch.Tensor, shape (W,)
+        Wavelength grid in nanometers.
+
+    Returns
+    -------
+    reflectance : torch.Tensor, shape (B, W)
+        Reflectance values, differentiable w.r.t. all inputs.
+    """
+    import torch
+
+    # Fixed complex refractive indices for air and silicon substrate
+    n_air = torch.tensor(1.0 + 0.0j, dtype=torch.complex128, device=thicknesses.device)
+    n_si = torch.tensor(3.88 + 0.02j, dtype=torch.complex128, device=thicknesses.device)
+
+    # Build complex film refractive index: (B,) → (B, 1)
+    n_film = torch.complex(n_vals.double(), k_vals.double()).unsqueeze(1)  # (B, 1)
+    d = thicknesses.double().unsqueeze(1)                                  # (B, 1)
+    wl = wavelengths.double().unsqueeze(0)                                 # (1, W)
+
+    # Phase thickness: (B, 1) * (1, W) → (B, W)
+    delta = (2.0 * torch.pi / wl) * n_film * d  # (B, W)
+
+    # Characteristic matrix elements — all (B, W) complex
+    cos_d = torch.cos(delta)
+    sin_d = torch.sin(delta)
+    m11 = cos_d
+    m12 = -1j * sin_d / n_film
+    m21 = -1j * n_film * sin_d
+    m22 = cos_d
+
+    # Reflection coefficient
+    numerator = (m11 + m12 * n_si) * n_air - (m21 + m22 * n_si)
+    denominator = (m11 + m12 * n_si) * n_air + (m21 + m22 * n_si)
+    r = numerator / denominator
+
+    # Reflectance = |r|^2, returned as real-valued float tensor
+    reflectance = torch.abs(r) ** 2
+
+    return reflectance.float()
+
+
 if __name__ == "__main__":
     # --- Demo: 100 nm SiO2 film on silicon ---
 
@@ -193,3 +249,77 @@ if __name__ == "__main__":
     print(f"  Loop time:  {t_loop*1000:.1f} ms")
     print(f"  Batch time: {t_batch_time*1000:.1f} ms")
     print(f"  Speedup:    {t_loop/t_batch_time:.1f}x")
+
+    # --- Validate torch implementation ---
+    import torch
+
+    B_torch = 1000
+    rng2 = np.random.default_rng(99)
+    t_np = rng2.uniform(10, 300, B_torch).astype(np.float64)
+    n_np = rng2.uniform(1.3, 2.5, B_torch).astype(np.float64)
+    k_np = rng2.uniform(0.0, 0.5, B_torch).astype(np.float64)
+    wl_np = np.linspace(400, 800, 200)
+
+    # Numpy reference
+    ref = simulate_reflectance_batch(t_np, n_np, k_np, wl_np)
+
+    # Torch CPU
+    t_t = torch.tensor(t_np, requires_grad=True)
+    n_t = torch.tensor(n_np, requires_grad=False)
+    k_t = torch.tensor(k_np, requires_grad=False)
+    wl_t = torch.tensor(wl_np)
+
+    out_cpu = simulate_reflectance_torch(t_t, n_t, k_t, wl_t)
+    max_diff = (out_cpu.detach().numpy().astype(np.float64) - ref).max()
+    print(f"\nTorch vs numpy batch (B={B_torch}):")
+    print(f"  Max abs difference: {abs(max_diff):.2e}")
+
+    # Gradient check
+    out_cpu.sum().backward()
+    grad_ok = t_t.grad is not None and not torch.all(t_t.grad == 0).item()
+    print(f"  Gradient flows to thickness: {grad_ok}")
+    if t_t.grad is not None:
+        print(f"  Grad mean abs: {t_t.grad.abs().mean():.6e}")
+
+    # Timing: numpy batch vs torch CPU vs torch CUDA
+    n_runs = 20
+
+    # Numpy batch
+    t0 = time.perf_counter()
+    for _ in range(n_runs):
+        simulate_reflectance_batch(t_np, n_np, k_np, wl_np)
+    t_numpy = (time.perf_counter() - t0) / n_runs * 1000
+
+    # Torch CPU
+    t_t_cpu = torch.tensor(t_np)
+    n_t_cpu = torch.tensor(n_np)
+    k_t_cpu = torch.tensor(k_np)
+    wl_t_cpu = torch.tensor(wl_np)
+    t0 = time.perf_counter()
+    for _ in range(n_runs):
+        simulate_reflectance_torch(t_t_cpu, n_t_cpu, k_t_cpu, wl_t_cpu)
+    t_torch_cpu = (time.perf_counter() - t0) / n_runs * 1000
+
+    print(f"\nTiming (B={B_torch}, avg of {n_runs} runs):")
+    print(f"  Numpy batch: {t_numpy:.1f} ms")
+    print(f"  Torch CPU:   {t_torch_cpu:.1f} ms")
+
+    # Torch CUDA (if available)
+    if torch.cuda.is_available():
+        dev = torch.device("cuda")
+        t_t_g = torch.tensor(t_np, device=dev)
+        n_t_g = torch.tensor(n_np, device=dev)
+        k_t_g = torch.tensor(k_np, device=dev)
+        wl_t_g = torch.tensor(wl_np, device=dev)
+        # Warm up
+        for _ in range(5):
+            simulate_reflectance_torch(t_t_g, n_t_g, k_t_g, wl_t_g)
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        for _ in range(n_runs):
+            simulate_reflectance_torch(t_t_g, n_t_g, k_t_g, wl_t_g)
+        torch.cuda.synchronize()
+        t_torch_cuda = (time.perf_counter() - t0) / n_runs * 1000
+        print(f"  Torch CUDA:  {t_torch_cuda:.1f} ms")
+    else:
+        print("  CUDA not available, skipping GPU timing")
