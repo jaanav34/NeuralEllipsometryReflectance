@@ -226,6 +226,8 @@ with tab2:
     )
 
     input_spectrum = None
+    has_true_params = False
+    true_thick, true_n_val, true_k_val = None, None, None
 
     if input_mode == "Enter spectrum manually":
         col_text, col_btn = st.columns([3, 1])
@@ -271,6 +273,9 @@ with tab2:
             st.caption("Simulates measurement noise on top of the "
                        "ideal TMM spectrum.")
 
+        has_true_params = True
+        true_thick, true_n_val, true_k_val = gen_thick, gen_n, gen_k
+
         clean = simulate_reflectance(gen_thick, gen_n, gen_k, WAVELENGTHS)
         rng = np.random.default_rng()
         noisy = clean + rng.normal(0, noise_level, size=clean.shape)
@@ -313,57 +318,85 @@ with tab2:
                     WAVELENGTHS
                 )
 
+            # --- Helper: colored CI badge ---
+            def _ci_badge(ci_val, std_val, fmt, thresholds):
+                """Return colored markdown for a CI badge."""
+                lo, hi = thresholds
+                text = f"\u00b1{ci_val:{fmt}}"
+                if std_val < lo:
+                    return f":green-background[{text}]"
+                elif std_val < hi:
+                    return f":orange-background[{text}]"
+                else:
+                    return f":red-background[{text}]"
+
             # --- Show predicted parameters ---
             st.subheader("Predicted Parameters")
 
+            ci_thick_badge = _ci_badge(ci_thick, std_thick, ".1f",
+                                       (5, 15))
+            ci_n_badge = _ci_badge(ci_n, std_n, ".4f", (0.05, 0.15))
+            ci_k_badge = _ci_badge(ci_k, std_k, ".4f", (0.01, 0.03))
+
+            # Row layout: one row per parameter, columns align across rows
+            # Determine how many columns per row
+            n_cols = 1  # always have NN
+            if has_true_params:
+                n_cols += 1
             if ref_result is not None:
-                col_nn, col_ref = st.columns(2)
+                n_cols += 1
 
-                with col_nn:
-                    st.markdown("**Neural Network**")
-                    st.metric("Thickness", f"{pred_thick:.1f} nm")
-                    ci_text = f"95% CI: \u00b1{ci_thick:.1f} nm"
-                    if std_thick < 5:
-                        st.success(ci_text)
-                    elif std_thick < 15:
-                        st.warning(ci_text)
-                    else:
-                        st.error(ci_text)
-                    st.metric("Refractive index n", f"{pred_n:.4f}")
-                    ci_text = f"95% CI: \u00b1{ci_n:.4f}"
-                    if std_n < 0.05:
-                        st.success(ci_text)
-                    elif std_n < 0.15:
-                        st.warning(ci_text)
-                    else:
-                        st.error(ci_text)
-                    st.metric("Extinction coefficient k", f"{pred_k:.4f}")
-                    ci_text = f"95% CI: \u00b1{ci_k:.4f}"
-                    if std_k < 0.01:
-                        st.success(ci_text)
-                    elif std_k < 0.03:
-                        st.warning(ci_text)
-                    else:
-                        st.error(ci_text)
+            # Header row
+            hdr_cols = st.columns(n_cols)
+            idx = 0
+            if has_true_params:
+                hdr_cols[idx].markdown("**Your Parameters**")
+                idx += 1
+            hdr_cols[idx].markdown("**Neural Network**")
+            idx += 1
+            if ref_result is not None:
+                hdr_cols[idx].markdown("**NN + Refiner**")
 
-                with col_ref:
-                    st.markdown("**NN + Refiner**")
-                    st.metric("Thickness",
-                              f"{ref_result['thickness']:.1f} nm")
-                    st.metric("Refractive index n",
-                              f"{ref_result['n']:.4f}")
-                    st.metric("Extinction coefficient k",
-                              f"{ref_result['k']:.4f}")
-                    if ref_result["success"]:
-                        st.success(
-                            f"Converged in {ref_result['n_iterations']} "
-                            f"iterations"
-                        )
-                    else:
-                        st.warning("Optimizer did not fully converge")
-                    st.metric("Residual improvement",
-                              f"{ref_result['improvement']:.1f}%")
+            # Parameter rows: [true | NN value + CI | refiner]
+            param_rows = [
+                ("Thickness",
+                 f"{true_thick} nm" if has_true_params else None,
+                 f"{pred_thick:.1f} nm", ci_thick_badge,
+                 f"{ref_result['thickness']:.1f} nm" if ref_result else None),
+                ("Refractive index n",
+                 f"{true_n_val:.2f}" if has_true_params else None,
+                 f"{pred_n:.4f}", ci_n_badge,
+                 f"{ref_result['n']:.4f}" if ref_result else None),
+                ("Extinction coeff. k",
+                 f"{true_k_val:.3f}" if has_true_params else None,
+                 f"{pred_k:.4f}", ci_k_badge,
+                 f"{ref_result['k']:.4f}" if ref_result else None),
+            ]
 
+            for label, true_val, nn_val, ci_badge, ref_val in param_rows:
+                row = st.columns(n_cols)
+                idx = 0
+                if has_true_params:
+                    row[idx].metric(label, true_val)
+                    idx += 1
+                row[idx].metric(label, nn_val)
+                row[idx].markdown(f"95% CI: {ci_badge}")
+                idx += 1
+                if ref_result is not None:
+                    row[idx].metric(label, ref_val)
+
+            # Refiner convergence info
+            if ref_result is not None:
+                if ref_result["success"]:
+                    st.success(
+                        f"Converged in {ref_result['n_iterations']} "
+                        f"iterations — residual improved "
+                        f"{ref_result['improvement']:.1f}%"
+                    )
+                else:
+                    st.warning("Optimizer did not fully converge")
+
+            if ref_result is not None:
                 st.info(
                     "**What the refiner does:** The neural network provides "
                     "a fast initial guess. The spectral optimizer then "
@@ -375,35 +408,6 @@ with tab2:
                     "the spectral residual by 90%+ and corrects small "
                     "systematic biases in the NN prediction."
                 )
-            else:
-                mc1, mc2, mc3 = st.columns(3)
-                with mc1:
-                    st.metric("Thickness", f"{pred_thick:.1f} nm")
-                    ci_text = f"95% CI: \u00b1{ci_thick:.1f} nm"
-                    if std_thick < 5:
-                        st.success(ci_text)
-                    elif std_thick < 15:
-                        st.warning(ci_text)
-                    else:
-                        st.error(ci_text)
-                with mc2:
-                    st.metric("Refractive index n", f"{pred_n:.4f}")
-                    ci_text = f"95% CI: \u00b1{ci_n:.4f}"
-                    if std_n < 0.05:
-                        st.success(ci_text)
-                    elif std_n < 0.15:
-                        st.warning(ci_text)
-                    else:
-                        st.error(ci_text)
-                with mc3:
-                    st.metric("Extinction coefficient k", f"{pred_k:.4f}")
-                    ci_text = f"95% CI: \u00b1{ci_k:.4f}"
-                    if std_k < 0.01:
-                        st.success(ci_text)
-                    elif std_k < 0.03:
-                        st.warning(ci_text)
-                    else:
-                        st.error(ci_text)
 
             # --- Spectral plots ---
             # Use refined params if available, otherwise NN params
