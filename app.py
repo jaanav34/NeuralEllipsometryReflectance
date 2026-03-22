@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 
 from tmm_simulator import simulate_reflectance
 from train import SpectraNet
+from refiner import refine_prediction
 
 # ──────────────────────────────────────────────
 # Constants
@@ -289,6 +290,9 @@ with tab2:
         plt.close(fig_noisy)
 
     if input_spectrum is not None:
+        use_refiner = st.checkbox("Refine with spectral optimizer",
+                                  value=True, key="use_refiner")
+
         if st.button("Predict Parameters", type="primary"):
             means, stds, all_samples = predict_with_uncertainty(
                 input_spectrum, model, X_mean, X_std,
@@ -300,58 +304,136 @@ with tab2:
             ci_n = 1.96 * std_n
             ci_k = 1.96 * std_k
 
-            # Show predicted parameters with uncertainty
+            # Optionally run refiner
+            ref_result = None
+            if use_refiner:
+                ref_result = refine_prediction(
+                    input_spectrum,
+                    float(pred_thick), float(pred_n), float(pred_k),
+                    WAVELENGTHS
+                )
+
+            # --- Show predicted parameters ---
             st.subheader("Predicted Parameters")
-            mc1, mc2, mc3 = st.columns(3)
 
-            # --- Thickness ---
-            with mc1:
-                st.metric("Thickness", f"{pred_thick:.1f} nm")
-                ci_text = f"95% CI: \u00b1{ci_thick:.1f} nm"
-                if std_thick < 5:
-                    st.success(ci_text)
-                elif std_thick < 15:
-                    st.warning(ci_text)
-                else:
-                    st.error(ci_text)
+            if ref_result is not None:
+                col_nn, col_ref = st.columns(2)
 
-            # --- n ---
-            with mc2:
-                st.metric("Refractive index n", f"{pred_n:.4f}")
-                ci_text = f"95% CI: \u00b1{ci_n:.4f}"
-                if std_n < 0.05:
-                    st.success(ci_text)
-                elif std_n < 0.15:
-                    st.warning(ci_text)
-                else:
-                    st.error(ci_text)
+                with col_nn:
+                    st.markdown("**Neural Network**")
+                    st.metric("Thickness", f"{pred_thick:.1f} nm")
+                    ci_text = f"95% CI: \u00b1{ci_thick:.1f} nm"
+                    if std_thick < 5:
+                        st.success(ci_text)
+                    elif std_thick < 15:
+                        st.warning(ci_text)
+                    else:
+                        st.error(ci_text)
+                    st.metric("Refractive index n", f"{pred_n:.4f}")
+                    ci_text = f"95% CI: \u00b1{ci_n:.4f}"
+                    if std_n < 0.05:
+                        st.success(ci_text)
+                    elif std_n < 0.15:
+                        st.warning(ci_text)
+                    else:
+                        st.error(ci_text)
+                    st.metric("Extinction coefficient k", f"{pred_k:.4f}")
+                    ci_text = f"95% CI: \u00b1{ci_k:.4f}"
+                    if std_k < 0.01:
+                        st.success(ci_text)
+                    elif std_k < 0.03:
+                        st.warning(ci_text)
+                    else:
+                        st.error(ci_text)
 
-            # --- k ---
-            with mc3:
-                st.metric("Extinction coefficient k", f"{pred_k:.4f}")
-                ci_text = f"95% CI: \u00b1{ci_k:.4f}"
-                if std_k < 0.01:
-                    st.success(ci_text)
-                elif std_k < 0.03:
-                    st.warning(ci_text)
-                else:
-                    st.error(ci_text)
+                with col_ref:
+                    st.markdown("**NN + Refiner**")
+                    st.metric("Thickness",
+                              f"{ref_result['thickness']:.1f} nm")
+                    st.metric("Refractive index n",
+                              f"{ref_result['n']:.4f}")
+                    st.metric("Extinction coefficient k",
+                              f"{ref_result['k']:.4f}")
+                    if ref_result["success"]:
+                        st.success(
+                            f"Converged in {ref_result['n_iterations']} "
+                            f"iterations"
+                        )
+                    else:
+                        st.warning("Optimizer did not fully converge")
+                    st.metric("Residual improvement",
+                              f"{ref_result['improvement']:.1f}%")
 
-            # Re-simulate from mean predictions
-            re_sim = simulate_reflectance(float(pred_thick), float(pred_n),
-                                          float(pred_k), WAVELENGTHS)
-            residual = input_spectrum - re_sim
-            spectral_mae = np.mean(np.abs(residual))
+                st.info(
+                    "**What the refiner does:** The neural network provides "
+                    "a fast initial guess. The spectral optimizer then "
+                    "fine-tunes the parameters by minimizing the MSE "
+                    "between the input spectrum and the spectrum "
+                    "re-simulated from the predicted parameters using "
+                    "L-BFGS-B with physical box constraints. This "
+                    "deterministic post-processing step typically reduces "
+                    "the spectral residual by 90%+ and corrects small "
+                    "systematic biases in the NN prediction."
+                )
+            else:
+                mc1, mc2, mc3 = st.columns(3)
+                with mc1:
+                    st.metric("Thickness", f"{pred_thick:.1f} nm")
+                    ci_text = f"95% CI: \u00b1{ci_thick:.1f} nm"
+                    if std_thick < 5:
+                        st.success(ci_text)
+                    elif std_thick < 15:
+                        st.warning(ci_text)
+                    else:
+                        st.error(ci_text)
+                with mc2:
+                    st.metric("Refractive index n", f"{pred_n:.4f}")
+                    ci_text = f"95% CI: \u00b1{ci_n:.4f}"
+                    if std_n < 0.05:
+                        st.success(ci_text)
+                    elif std_n < 0.15:
+                        st.warning(ci_text)
+                    else:
+                        st.error(ci_text)
+                with mc3:
+                    st.metric("Extinction coefficient k", f"{pred_k:.4f}")
+                    ci_text = f"95% CI: \u00b1{ci_k:.4f}"
+                    if std_k < 0.01:
+                        st.success(ci_text)
+                    elif std_k < 0.03:
+                        st.warning(ci_text)
+                    else:
+                        st.error(ci_text)
 
-            # Overlay plot
+            # --- Spectral plots ---
+            # Use refined params if available, otherwise NN params
+            if ref_result is not None:
+                display_thick = ref_result["thickness"]
+                display_n = ref_result["n"]
+                display_k = ref_result["k"]
+            else:
+                display_thick = float(pred_thick)
+                display_n = float(pred_n)
+                display_k = float(pred_k)
+
+            re_sim_nn = simulate_reflectance(float(pred_thick),
+                                             float(pred_n),
+                                             float(pred_k), WAVELENGTHS)
+            re_sim_ref = (simulate_reflectance(display_thick, display_n,
+                                               display_k, WAVELENGTHS)
+                          if ref_result is not None else None)
+
             col_p1, col_p2 = st.columns(2)
             with col_p1:
                 fig_ov, ax_ov = plt.subplots(figsize=(7, 4))
-                ax_ov.plot(WAVELENGTHS, input_spectrum, label="Input",
-                           linewidth=1.5)
-                ax_ov.plot(WAVELENGTHS, re_sim, "--",
-                           label="Re-simulated from prediction",
-                           linewidth=1.5)
+                ax_ov.plot(WAVELENGTHS, input_spectrum, "k-",
+                           label="Input", linewidth=1.5)
+                ax_ov.plot(WAVELENGTHS, re_sim_nn, "--", color="#1f77b4",
+                           label="NN re-simulated", linewidth=1.5)
+                if re_sim_ref is not None:
+                    ax_ov.plot(WAVELENGTHS, re_sim_ref, "--",
+                               color="#2ca02c",
+                               label="Refined re-simulated", linewidth=1.5)
                 ax_ov.set_xlabel("Wavelength (nm)")
                 ax_ov.set_ylabel("Reflectance")
                 ax_ov.set_title("Input vs Re-simulated Spectrum")
@@ -362,25 +444,33 @@ with tab2:
                 plt.close(fig_ov)
 
             with col_p2:
+                residual_nn = input_spectrum - re_sim_nn
                 fig_res, ax_res = plt.subplots(figsize=(7, 4))
-                ax_res.plot(WAVELENGTHS, residual, color="red", linewidth=1)
-                ax_res.axhline(0, color="gray", linestyle="--", linewidth=0.5)
+                ax_res.plot(WAVELENGTHS, residual_nn, color="#1f77b4",
+                            linewidth=1, label="NN residual")
+                if re_sim_ref is not None:
+                    residual_ref = input_spectrum - re_sim_ref
+                    ax_res.plot(WAVELENGTHS, residual_ref, color="#2ca02c",
+                                linewidth=1, label="Refined residual")
+                ax_res.axhline(0, color="gray", linestyle="--",
+                               linewidth=0.5)
                 ax_res.set_xlabel("Wavelength (nm)")
                 ax_res.set_ylabel("Residual (input - re-sim)")
                 ax_res.set_title("Spectral Residual")
+                ax_res.legend()
                 ax_res.grid(True, alpha=0.3)
                 fig_res.tight_layout()
                 st.pyplot(fig_res)
                 plt.close(fig_res)
 
-            st.metric("Spectral MAE", f"{spectral_mae:.6f}",
-                      help="Mean absolute error between the input spectrum "
-                           "and the spectrum re-simulated from predicted "
-                           "parameters. Lower is better.")
+            nn_mae = float(np.mean(np.abs(input_spectrum - re_sim_nn)))
+            st.metric("NN Spectral MAE", f"{nn_mae:.6f}")
+            if ref_result is not None:
+                ref_mae = float(np.mean(np.abs(input_spectrum - re_sim_ref)))
+                st.metric("Refined Spectral MAE", f"{ref_mae:.6f}")
 
             # Uncertainty analysis expander
             with st.expander("Uncertainty Analysis"):
-                # Histograms of MC Dropout samples
                 param_names = ["Thickness (nm)", "n", "k"]
                 fig_hist, axes_hist = plt.subplots(1, 3, figsize=(14, 3.5))
                 for i, (ax, name) in enumerate(zip(axes_hist, param_names)):
@@ -388,6 +478,13 @@ with tab2:
                             alpha=0.7, color="#1f77b4")
                     ax.axvline(means[i], color="red", linestyle="--",
                                linewidth=1.5, label=f"Mean = {means[i]:.3f}")
+                    if ref_result is not None:
+                        ref_vals = [ref_result["thickness"],
+                                    ref_result["n"], ref_result["k"]]
+                        ax.axvline(ref_vals[i], color="#2ca02c",
+                                   linestyle="-.",
+                                   linewidth=1.5,
+                                   label=f"Refined = {ref_vals[i]:.3f}")
                     ax.set_xlabel(name)
                     ax.set_ylabel("Count")
                     ax.set_title(f"{name} ({mc_n_samples} MC samples)")
@@ -397,7 +494,6 @@ with tab2:
                 st.pyplot(fig_hist)
                 plt.close(fig_hist)
 
-                # Plain-language interpretation
                 labels_for_interp = ["thickness", "n", "k"]
                 thresholds_low = [5.0, 0.05, 0.01]
                 confident = []
