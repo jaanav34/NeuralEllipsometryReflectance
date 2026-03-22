@@ -48,8 +48,8 @@ if __name__ == "__main__":
 
     # Fixed physical bounds for parameter normalization → [0, 1]
     PARAM_BOUNDS = np.array([[10.0, 300.0],    # thickness (nm)
-                             [1.3, 2.5],       # n
-                             [0.0, 0.5]],      # k
+                            [1.3, 2.5],       # n
+                            [0.0, 0.5]],      # k
                             dtype=np.float32)
     param_min = PARAM_BOUNDS[:, 0]
     param_range = PARAM_BOUNDS[:, 1] - PARAM_BOUNDS[:, 0]
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     train_ds = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
     val_ds = TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val))
     test_ds = TensorDataset(torch.from_numpy(X_test - 0 * X_test),
-                             torch.from_numpy(y_test_norm))
+                            torch.from_numpy(y_test_norm))
 
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE)
@@ -161,12 +161,12 @@ if __name__ == "__main__":
 
         if epoch % 10 == 0 or epoch == 1 or epochs_without_improvement == 0:
             print(f"Epoch {epoch:3d} | train {train_loss:.6f} | "
-                  f"val {val_loss:.6f} | lr {current_lr:.1e}"
-                  f"{' *' if epochs_without_improvement == 0 else ''}")
+                f"val {val_loss:.6f} | lr {current_lr:.1e}"
+                f"{' *' if epochs_without_improvement == 0 else ''}")
 
         if epochs_without_improvement >= EARLY_STOP_PATIENCE:
             print(f"\nEarly stopping at epoch {epoch} "
-                  f"(no improvement for {EARLY_STOP_PATIENCE} epochs)")
+                f"(no improvement for {EARLY_STOP_PATIENCE} epochs)")
             break
 
     print(f"\nBest validation loss: {best_val_loss:.6f}")
