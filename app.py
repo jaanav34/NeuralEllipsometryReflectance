@@ -73,6 +73,7 @@ def predict_with_uncertainty(spectrum, model, X_mean, X_std, n_samples=100):
     # Enable dropout by switching to train mode
     model.train()
     samples = []
+    torch.manual_seed(42)  # deterministic dropout masks for reproducibility
     with torch.no_grad():
         for _ in range(n_samples):
             pred_norm = model(x_tensor).numpy()[0]  # (3,)
