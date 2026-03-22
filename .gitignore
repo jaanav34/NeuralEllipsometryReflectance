@@ -1,2 +1,8 @@
-__pycache__/
+dataset.npz
+dataset_v2.npz
 *.npz
+!spectra_norm_v4.npz
+!spectra_norm.npz
+__pycache__/
+*.pyc
+.env
