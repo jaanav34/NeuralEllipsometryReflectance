@@ -55,12 +55,54 @@ def predict_params(spectrum, model, X_mean, X_std):
     return pred_norm * PARAM_RANGE + PARAM_MIN
 
 
+def predict_with_uncertainty(spectrum, model, X_mean, X_std, n_samples=100):
+    """
+    Run MC Dropout inference: keep dropout active during inference
+    by calling model.train() instead of model.eval(), run n_samples
+    forward passes, return mean and std of predictions.
+
+    Returns:
+        means: np.array shape (3,) — mean predicted [thickness, n, k]
+        stds: np.array shape (3,) — std of predictions [thickness, n, k]
+        all_samples: np.array shape (n_samples, 3) — all individual draws
+    All in physical units (denormalized).
+    """
+    x = (spectrum.astype(np.float32) - X_mean) / X_std
+    x_tensor = torch.from_numpy(x[np.newaxis, :])  # (1, 200)
+
+    # Enable dropout by switching to train mode
+    model.train()
+    samples = []
+    with torch.no_grad():
+        for _ in range(n_samples):
+            pred_norm = model(x_tensor).numpy()[0]  # (3,)
+            pred_phys = pred_norm * PARAM_RANGE + PARAM_MIN
+            samples.append(pred_phys)
+
+    # Restore eval mode for normal inference
+    model.eval()
+
+    all_samples = np.array(samples)  # (n_samples, 3)
+    means = all_samples.mean(axis=0)
+    stds = all_samples.std(axis=0)
+    return means, stds, all_samples
+
+
 # ──────────────────────────────────────────────
 # Page config
 # ──────────────────────────────────────────────
 
 st.set_page_config(page_title="Neural Ellipsometry", layout="wide")
 st.title("Neural Ellipsometry Reflectance")
+
+# Sidebar controls
+with st.sidebar:
+    st.subheader("MC Dropout Settings")
+    mc_n_samples = st.slider("MC samples", 20, 200, 100, step=10,
+                             key="mc_samples",
+                             help="Number of stochastic forward passes. "
+                                  "Higher = slower but more stable "
+                                  "uncertainty estimate.")
 
 tab1, tab2, tab3 = st.tabs([
     "Forward Simulator",
@@ -247,17 +289,54 @@ with tab2:
 
     if input_spectrum is not None:
         if st.button("Predict Parameters", type="primary"):
-            pred = predict_params(input_spectrum, model, X_mean, X_std)
-            pred_thick, pred_n, pred_k = pred
+            means, stds, all_samples = predict_with_uncertainty(
+                input_spectrum, model, X_mean, X_std,
+                n_samples=mc_n_samples
+            )
+            pred_thick, pred_n, pred_k = means
+            std_thick, std_n, std_k = stds
+            ci_thick = 1.96 * std_thick
+            ci_n = 1.96 * std_n
+            ci_k = 1.96 * std_k
 
-            # Show predicted parameters
+            # Show predicted parameters with uncertainty
             st.subheader("Predicted Parameters")
             mc1, mc2, mc3 = st.columns(3)
-            mc1.metric("Thickness", f"{pred_thick:.1f} nm")
-            mc2.metric("Refractive index n", f"{pred_n:.4f}")
-            mc3.metric("Extinction coefficient k", f"{pred_k:.4f}")
 
-            # Re-simulate from predictions
+            # --- Thickness ---
+            with mc1:
+                st.metric("Thickness", f"{pred_thick:.1f} nm")
+                ci_text = f"95% CI: \u00b1{ci_thick:.1f} nm"
+                if std_thick < 5:
+                    st.success(ci_text)
+                elif std_thick < 15:
+                    st.warning(ci_text)
+                else:
+                    st.error(ci_text)
+
+            # --- n ---
+            with mc2:
+                st.metric("Refractive index n", f"{pred_n:.4f}")
+                ci_text = f"95% CI: \u00b1{ci_n:.4f}"
+                if std_n < 0.05:
+                    st.success(ci_text)
+                elif std_n < 0.15:
+                    st.warning(ci_text)
+                else:
+                    st.error(ci_text)
+
+            # --- k ---
+            with mc3:
+                st.metric("Extinction coefficient k", f"{pred_k:.4f}")
+                ci_text = f"95% CI: \u00b1{ci_k:.4f}"
+                if std_k < 0.01:
+                    st.success(ci_text)
+                elif std_k < 0.03:
+                    st.warning(ci_text)
+                else:
+                    st.error(ci_text)
+
+            # Re-simulate from mean predictions
             re_sim = simulate_reflectance(float(pred_thick), float(pred_n),
                                           float(pred_k), WAVELENGTHS)
             residual = input_spectrum - re_sim
@@ -297,6 +376,57 @@ with tab2:
                       help="Mean absolute error between the input spectrum "
                            "and the spectrum re-simulated from predicted "
                            "parameters. Lower is better.")
+
+            # Uncertainty analysis expander
+            with st.expander("Uncertainty Analysis"):
+                # Histograms of MC Dropout samples
+                param_names = ["Thickness (nm)", "n", "k"]
+                fig_hist, axes_hist = plt.subplots(1, 3, figsize=(14, 3.5))
+                for i, (ax, name) in enumerate(zip(axes_hist, param_names)):
+                    ax.hist(all_samples[:, i], bins=25, edgecolor="black",
+                            alpha=0.7, color="#1f77b4")
+                    ax.axvline(means[i], color="red", linestyle="--",
+                               linewidth=1.5, label=f"Mean = {means[i]:.3f}")
+                    ax.set_xlabel(name)
+                    ax.set_ylabel("Count")
+                    ax.set_title(f"{name} ({mc_n_samples} MC samples)")
+                    ax.legend(fontsize=8)
+                    ax.grid(True, alpha=0.3)
+                fig_hist.tight_layout()
+                st.pyplot(fig_hist)
+                plt.close(fig_hist)
+
+                # Plain-language interpretation
+                labels_for_interp = ["thickness", "n", "k"]
+                thresholds_low = [5.0, 0.05, 0.01]
+                confident = []
+                uncertain = []
+                for i, (name, thr) in enumerate(
+                    zip(labels_for_interp, thresholds_low)
+                ):
+                    if stds[i] < thr:
+                        confident.append(name)
+                    else:
+                        uncertain.append(name)
+
+                if confident and uncertain:
+                    st.info(
+                        f"The model is **confident** about "
+                        f"**{', '.join(confident)}** but "
+                        f"**uncertain** about "
+                        f"**{', '.join(uncertain)}**."
+                    )
+                elif confident:
+                    st.success(
+                        "The model is **confident** about all three "
+                        "parameters."
+                    )
+                else:
+                    st.warning(
+                        "The model shows **elevated uncertainty** across "
+                        "all parameters. The input spectrum may be outside "
+                        "the training distribution or contain high noise."
+                    )
 
 # ──────────────────────────────────────────────
 # TAB 3: Model Performance
