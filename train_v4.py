@@ -52,6 +52,8 @@ if __name__ == "__main__":
     X_std = X_train_raw.std(axis=0)
     X_std[X_std < 1e-8] = 1.0
 
+    np.savez("spectra_norm_v4.npz", mean=X_mean, std=X_std)
+
     X_train_norm = (X_train_raw - X_mean) / X_std
     X_val_norm = (X_val_raw - X_mean) / X_std
     X_test_norm = (X_test_raw - X_mean) / X_std
