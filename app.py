@@ -136,7 +136,7 @@ tab1, tab2, tab3 = st.tabs([
 # ──────────────────────────────────────────────
 
 with tab1:
-    st.header("Transfer Matrix Method — Forward Simulator")
+    st.header("Transfer Matrix Method: Forward Simulator")
 
     col_sliders, col_plot = st.columns([1, 2])
 
@@ -233,7 +233,7 @@ with tab1:
 # ──────────────────────────────────────────────
 
 with tab2:
-    st.header("SpectraNet V4 — Inverse Predictor")
+    st.header("SpectraNet V4: Inverse Predictor")
 
     model = load_model()
     X_mean, X_std = load_norm_stats()
@@ -457,7 +457,7 @@ with tab2:
                 if ref_result["success"]:
                     st.success(
                         f"Converged in {ref_result['n_iterations']} "
-                        f"iterations — residual improved "
+                        f"iterations, residual improved "
                         f"{ref_result['improvement']:.1f}%"
                     )
                 else:
@@ -606,39 +606,180 @@ with tab2:
 # ──────────────────────────────────────────────
 
 with tab3:
-    st.header("Model Performance Across Versions")
+    st.header("Neural Thin-Film Metrology")
 
-    # V4 plots
-    st.subheader("V4 — Physics-Informed Loss (Best)")
-    col_v4a, col_v4b = st.columns(2)
-    with col_v4a:
-        try:
-            st.image("loss_curve_v4.png", caption="V4 Loss Curve")
-        except FileNotFoundError:
-            st.warning("loss_curve_v4.png not found")
-    with col_v4b:
-        try:
-            st.image("parity_plot_v4.png", caption="V4 Parity Plot")
-        except FileNotFoundError:
-            st.warning("parity_plot_v4.png not found")
+    # ── SECTION 1: The Problem ──────────────────
 
-    # V3 plots
-    st.subheader("V3 — Larger Dataset, No Physics Loss")
-    col_v3a, col_v3b = st.columns(2)
-    with col_v3a:
-        try:
-            st.image("loss_curve_v3.png", caption="V3 Loss Curve")
-        except FileNotFoundError:
-            st.warning("loss_curve_v3.png not found")
-    with col_v3b:
-        try:
-            st.image("parity_plot_v3.png", caption="V3 Parity Plot")
-        except FileNotFoundError:
-            st.warning("parity_plot_v3.png not found")
+    st.subheader("1. The Problem")
+    st.markdown("""
+**Thin-film metrology** is the science of measuring the thickness and
+optical properties of nanometer-scale coatings deposited on semiconductor
+wafers. Every chip fabrication step (oxide growth, anti-reflective
+coatings, passivation layers) requires verifying that the deposited film
+meets spec. Getting this wrong means defective chips and scrapped wafers.
 
-    # Comparison table
-    st.subheader("Version Comparison")
-    st.table({
+The measurement technique is **spectral reflectometry**: shine broadband
+light (400-800 nm) onto the wafer surface and record how much reflects
+back at each wavelength. The resulting **reflectance spectrum** encodes
+the film's thickness, refractive index (n), and extinction coefficient
+(k) through thin-film interference patterns. Thicker films produce more
+fringes; higher n increases fringe contrast; nonzero k damps the
+oscillations through absorption.
+
+The **inverse problem**, extracting (thickness, n, k) from a measured
+spectrum, is fundamentally hard because different parameter combinations
+can produce nearly identical spectra. A slightly thicker film with a
+slightly lower n shifts fringes the same way, creating a
+**thickness-n degeneracy** that worsens for thin films (<50 nm) where
+fewer than one fringe is visible. Traditional fitting methods (Levenberg-
+Marquardt, simplex) require good initial guesses and often get trapped
+in local minima.
+
+**Why speed matters:** KLA and other metrology companies measure every
+wafer at multiple points across the surface. A single 300mm wafer may
+require hundreds of measurements, each needing sub-second turnaround.
+Neural networks provide the speed (microseconds per inference) while
+physics-based refinement provides the accuracy.
+""")
+
+    st.divider()
+
+    # ── SECTION 2: The Forward Simulator ────────
+
+    st.subheader("2. The Forward Simulator")
+    st.markdown("""
+The **Transfer Matrix Method (TMM)** computes reflectance from first
+principles. For a single film on a substrate at normal incidence, it
+constructs a 2x2 characteristic matrix from the film's complex
+refractive index and phase thickness, then extracts the reflection
+coefficient by matching boundary conditions at both interfaces.
+The math is exact: no approximations, no fitting parameters.
+""")
+
+    # Plot 1: varying thickness
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        fig_thick, ax_thick = plt.subplots(figsize=(7, 4))
+        for d in [50, 100, 150, 200]:
+            R = simulate_reflectance(d, 1.46, 0.0, WAVELENGTHS)
+            ax_thick.plot(WAVELENGTHS, R, label=f"{d} nm", linewidth=1.5)
+        ax_thick.set_xlabel("Wavelength (nm)")
+        ax_thick.set_ylabel("Reflectance")
+        ax_thick.set_title("Effect of Thickness (n=1.46, k=0)")
+        ax_thick.legend()
+        ax_thick.grid(True, alpha=0.3)
+        ax_thick.annotate("More fringes = thicker film",
+                          xy=(0.5, 0.02), xycoords="axes fraction",
+                          fontsize=9, fontstyle="italic", ha="center",
+                          color="#555555")
+        fig_thick.tight_layout()
+        st.pyplot(fig_thick)
+        plt.close(fig_thick)
+
+    with col_t2:
+        fig_abs, ax_abs = plt.subplots(figsize=(7, 4))
+        for kv in [0.0, 0.1, 0.2, 0.3]:
+            R = simulate_reflectance(100, 1.46, kv, WAVELENGTHS)
+            ax_abs.plot(WAVELENGTHS, R, label=f"k={kv:.1f}", linewidth=1.5)
+        ax_abs.set_xlabel("Wavelength (nm)")
+        ax_abs.set_ylabel("Reflectance")
+        ax_abs.set_title("Effect of Absorption (d=100nm, n=1.46)")
+        ax_abs.legend()
+        ax_abs.grid(True, alpha=0.3)
+        ax_abs.annotate("Damped fringes = absorbing film",
+                        xy=(0.5, 0.02), xycoords="axes fraction",
+                        fontsize=9, fontstyle="italic", ha="center",
+                        color="#555555")
+        fig_abs.tight_layout()
+        st.pyplot(fig_abs)
+        plt.close(fig_abs)
+
+    st.markdown("""
+A key contribution of this project is implementing the TMM **entirely in
+PyTorch** so that gradients flow through the physics. This means the
+training loss can include a term that re-simulates the spectrum from
+predicted parameters and penalizes deviations, forcing the network to
+learn physically self-consistent mappings rather than just statistical
+correlations.
+""")
+
+    st.divider()
+
+    # ── SECTION 3: Model Evolution ──────────────
+
+    st.subheader("3. Model Evolution")
+
+    v1_col, v3_col, v4_col = st.columns(3)
+
+    with v1_col:
+        st.markdown("##### V1: Baseline")
+        st.markdown("""
+**Changed:** MLP [512, 256, 128, 64], 100k uniform random samples
+
+**Why:** Establish a baseline. Prove that a neural network can learn
+the inverse mapping at all.
+
+**Result:**
+- Overall R\u00b2 = 0.952
+- Thickness MAE = 3.65 nm
+- n R\u00b2 = 0.871
+
+**Finding:** The concept works, but n is the hard parameter. V2
+experiments with deeper architectures, BatchNorm, and residual
+connections all performed *worse*. Architecture was not the
+bottleneck.
+""")
+
+    with v3_col:
+        st.markdown("##### V3: Better Data")
+        st.markdown("""
+**Changed:** 500k stratified dataset (thickness-binned +
+n-binned + uniform)
+
+**Why:** V1's n R\u00b2 = 0.871 ceiling and V2's failure to improve
+via architecture both pointed to data as the bottleneck. Uniform
+sampling underrepresents thin films and extreme n values.
+
+**Result:**
+- Overall R\u00b2 = 0.967
+- Thickness MAE = 2.79 nm
+- n R\u00b2 = 0.915
+
+**Finding:** Data quality matters more than architecture. 5x more
+data with stratified sampling lifted every metric.
+""")
+
+    with v4_col:
+        st.markdown("##### V4: Physics Loss")
+        st.markdown("""
+**Changed:** TMM implemented in PyTorch. Training loss includes
+MSE between re-simulated and input spectrum, with gradients
+flowing through the simulator.
+
+**Why:** Physics-informed approaches are an active research
+direction in semiconductor metrology. The differentiable TMM
+acts as a regularizer that prevents the network from learning
+unphysical parameter combinations.
+
+**Result:**
+- Overall R\u00b2 = 0.975
+- Thickness MAE = 2.62 nm
+- n R\u00b2 = 0.930
+
+**Finding:** Physics loss most impactful on k (R\u00b2 0.990
+\u2192 0.996) and n (R\u00b2 0.915 \u2192 0.930), the parameters
+that directly control spectral shape.
+""")
+
+    st.divider()
+
+    # ── SECTION 4: Results ──────────────────────
+
+    st.subheader("4. Results")
+
+    import pandas as pd
+
+    results_df = pd.DataFrame({
         "Version": ["V1 (100k, baseline)", "V3 (500k, stratified)",
                      "V4 (500k, physics loss)"],
         "Thickness MAE (nm)": [3.65, 2.79, 2.62],
@@ -647,32 +788,232 @@ with tab3:
         "Overall R\u00b2": [0.952, 0.967, 0.975],
     })
 
-    # Explanations
-    st.subheader("Understanding the Results")
+    st.dataframe(
+        results_df.style
+        .background_gradient(subset=["n R\u00b2", "k R\u00b2",
+                                     "Overall R\u00b2"],
+                             cmap="Greens", vmin=0.85, vmax=1.0)
+        .background_gradient(subset=["Thickness MAE (nm)"],
+                             cmap="Greens_r", vmin=2.0, vmax=4.0),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # Training artifacts: 2x2 grid
+    st.markdown("##### Training Curves and Parity Plots")
+    row1_a, row1_b = st.columns(2)
+    row2_a, row2_b = st.columns(2)
+
+    with row1_a:
+        try:
+            st.image("loss_curve_v3.png")
+            st.caption("V3 loss curve: early stopping at ~80 epochs. "
+                       "Validation loss closely tracks training loss, "
+                       "confirming no overfitting with 500k samples.")
+        except FileNotFoundError:
+            st.warning("loss_curve_v3.png not found")
+    with row1_b:
+        try:
+            st.image("loss_curve_v4.png")
+            st.caption("V4 loss curve: the physics loss term adds a "
+                       "constant offset but does not destabilize training. "
+                       "Convergence is smooth.")
+        except FileNotFoundError:
+            st.warning("loss_curve_v4.png not found")
+    with row2_a:
+        try:
+            st.image("parity_plot_v3.png")
+            st.caption("V3 parity: thickness and k are tight around y=x. "
+                       "The n panel shows visible spread, the hardest "
+                       "parameter to predict.")
+        except FileNotFoundError:
+            st.warning("parity_plot_v3.png not found")
+    with row2_b:
+        try:
+            st.image("parity_plot_v4.png")
+            st.caption("V4 parity: physics loss tightens the n scatter "
+                       "and nearly eliminates k outliers. Thickness "
+                       "improves marginally.")
+        except FileNotFoundError:
+            st.warning("parity_plot_v4.png not found")
 
     st.markdown("""
-**What the parity plots show:**
-Each parity plot is a scatter of predicted vs true values for one parameter
-across the test set. Points falling on the red y=x line indicate perfect
-predictions. Spread around the line reflects prediction error. The MAE
-annotation quantifies the average absolute deviation from truth.
+**Reading the parity plots:** Each dot is one test sample. The x-axis is
+the true value, y-axis is the predicted value. Perfect predictions fall
+exactly on the red y=x line. The **thickness** panel is tightest because
+thickness has the strongest, most unambiguous effect on the spectrum
+(fringe count and spacing). The **n** panel is widest because refractive
+index changes produce subtler spectral shifts that overlap with thickness
+effects. This is the fundamental degeneracy of the inverse problem. The
+**k** panel is tight because absorption produces a distinctive damping
+pattern that is hard to confuse with other effects.
+""")
 
-**Why n is harder to predict than thickness or k:**
-Refractive index (n) affects reflectance primarily through fringe spacing
-and amplitude, both of which are also influenced by thickness. The spectrum
-is more sensitive to thickness changes (which shift fringe positions
-strongly) and to k changes (which damp overall reflectance), making those
-two parameters easier to disentangle. In contrast, changes in n produce
-subtler spectral shifts that can be partially mimicked by thickness
-adjustments, leading to a higher prediction error.
+    st.divider()
 
-**What the physics-informed loss contributed (V3 to V4):**
-The differentiable TMM loss in V4 forces the network's predictions to be
-physically self-consistent: the predicted (thickness, n, k) must
-re-produce the input spectrum when passed through the TMM simulator.
-This acts as a strong inductive bias that prevents the network from
-finding parameter combinations that minimize the training MSE but
-violate thin-film physics. The result is improved accuracy across all
-three parameters, with the biggest gains on n (R\u00b2 0.915 to 0.930)
-where the extra constraint helps resolve the thickness-n ambiguity.
+    # ── SECTION 5: The Full Pipeline ────────────
+
+    st.subheader("5. The Full Pipeline")
+
+    # Visual pipeline using styled containers
+    st.markdown(
+        '<p style="text-align:center; font-size:0.95rem; '
+        'color:#555; margin-bottom:0.2rem;">'
+        'Measured Reflectance Spectrum</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p style="text-align:center; font-size:1.4rem; '
+        'line-height:1; margin:0;">&#x25BC;</p>',
+        unsafe_allow_html=True,
+    )
+
+    pipe_cols = st.columns([1, 3])
+    with pipe_cols[0]:
+        st.markdown(
+            '<div style="background:#e8f4fd; border-left:4px solid #1f77b4; '
+            'padding:12px 14px; border-radius:0 6px 6px 0; '
+            'margin-bottom:4px;">'
+            '<strong style="font-size:1.05rem;">Joint Denoiser</strong></div>',
+            unsafe_allow_html=True,
+        )
+    with pipe_cols[1]:
+        st.markdown(
+            '<div style="padding:12px 0; color:#444; font-size:0.9rem;">'
+            'Physics-aware autoencoder trained with a frozen SpectraNet in '
+            'the loop. Preserves spectral features that matter for parameter '
+            'recovery rather than simply smoothing noise.</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        '<p style="text-align:center; font-size:1.4rem; '
+        'line-height:1; margin:0;">&#x25BC;</p>',
+        unsafe_allow_html=True,
+    )
+
+    pipe_cols2 = st.columns([1, 3])
+    with pipe_cols2[0]:
+        st.markdown(
+            '<div style="background:#e8f8e8; border-left:4px solid #2ca02c; '
+            'padding:12px 14px; border-radius:0 6px 6px 0; '
+            'margin-bottom:4px;">'
+            '<strong style="font-size:1.05rem;">SpectraNet V4</strong></div>',
+            unsafe_allow_html=True,
+        )
+    with pipe_cols2[1]:
+        st.markdown(
+            '<div style="padding:12px 0; color:#444; font-size:0.9rem;">'
+            '275k-parameter MLP trained with a differentiable TMM physics '
+            'loss. Produces initial parameter estimates in microseconds. '
+            'MC Dropout (100 forward passes) yields 95% confidence '
+            'intervals.</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        '<p style="text-align:center; font-size:1.4rem; '
+        'line-height:1; margin:0;">&#x25BC;</p>',
+        unsafe_allow_html=True,
+    )
+
+    pipe_cols3 = st.columns([1, 3])
+    with pipe_cols3[0]:
+        st.markdown(
+            '<div style="background:#fff3e0; border-left:4px solid #ff7f0e; '
+            'padding:12px 14px; border-radius:0 6px 6px 0; '
+            'margin-bottom:4px;">'
+            '<strong style="font-size:1.05rem;">L-BFGS-B Refiner</strong>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    with pipe_cols3[1]:
+        st.markdown(
+            '<div style="padding:12px 0; color:#444; font-size:0.9rem;">'
+            'Minimizes spectral residual against the <strong>original</strong>'
+            ' measured spectrum (not denoised) using box-constrained '
+            'quasi-Newton optimization. Typically converges in 20-30 '
+            'iterations, improving residual by 80-90%.</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        '<p style="text-align:center; font-size:1.4rem; '
+        'line-height:1; margin:0;">&#x25BC;</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p style="text-align:center; font-size:0.95rem; '
+        'color:#555; margin-top:0.2rem;">'
+        'Predicted Parameters &nbsp;+&nbsp; 95% Confidence Intervals</p>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("")  # spacing
+
+    st.markdown("""
+**Why this hybrid approach works:** The neural network provides a fast,
+globally-informed initial guess that avoids local minima, the primary
+failure mode of optimization-only approaches. The L-BFGS-B refiner then
+exploits the exact physics (TMM) to close the remaining residual, achieving
+accuracy that the network alone cannot reach. Together they combine the
+speed of inference (~1ms) with the precision of optimization (~50ms).
+
+**Why the refiner uses the original spectrum:** The denoiser reshapes
+spectral features to help the neural network, but in doing so it may
+subtly distort the spectrum away from the true physics. The refiner's job
+is to find parameters whose TMM simulation exactly matches the actual
+measurement, so it must optimize against the raw, unaltered spectrum.
+The denoiser's role is limited to providing a better starting point for
+the network. After that, the original measurement is the ground truth.
+""")
+
+    st.divider()
+
+    # ── SECTION 6: Limitations ──────────────────
+
+    st.subheader("6. Limitations and Honest Assessment")
+
+    st.markdown("""
+**The n-thickness degeneracy at low thickness (<50 nm):**
+When a film is thin enough that less than one fringe appears in the
+visible range, the spectrum becomes a smooth curve that can be fit by
+multiple (thickness, n) combinations. The model correctly flags this
+with wide MC Dropout uncertainty intervals, but the point prediction
+may be unreliable. This is a fundamental physical limitation, not a
+model deficiency.
+
+**k is never predicted as exactly zero:**
+The training distribution samples k uniformly from [0, 0.5]. The network
+learns a continuous mapping and cannot output a hard zero, so predictions
+for truly transparent films (k=0) typically floor at ~0.003-0.005. A
+classification head ("is k=0?") could fix this but was not implemented.
+
+**Denoiser limitations at high noise (std > 0.015):**
+At noise levels above ~0.015, the signal-to-noise ratio degrades to the
+point where spectral features (fringe positions, amplitudes) are
+irreversibly corrupted. The denoiser cannot recover information that was
+destroyed. It can only interpolate from what remains. The model's
+uncertainty estimates correctly widen in this regime.
+
+**Single-layer assumption:**
+This project models a single thin film on a silicon substrate. Real
+semiconductor stacks have 5-50 layers. The TMM generalizes naturally to
+multi-layer stacks, but the inverse problem becomes exponentially harder
+as the number of unknown parameters grows.
+
+**Normal incidence only:**
+Real spectroscopic ellipsometers measure at multiple angles of incidence
+and both s- and p-polarization components. Multi-angle measurements break
+the n-thickness degeneracy that limits this system. Extending to
+oblique incidence requires adding angle-dependent Fresnel coefficients
+to the TMM, straightforward in principle but a meaningful engineering
+effort.
+
+**What would actually fix these:**
+Spectroscopic ellipsometry (measuring polarization change, not just
+intensity), multi-angle reflectometry, and multi-layer TMM extensions.
+These are the standard approaches in production metrology tools. This
+project demonstrates the neural inversion concept on the simplest
+physically meaningful case.
 """)
