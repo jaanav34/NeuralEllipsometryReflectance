@@ -97,7 +97,7 @@ if __name__ == "__main__":
 
     LAMBDA_INVERSION = 2.0
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(denoiser.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(denoiser.parameters(), lr=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, patience=8, factor=0.5
     )
