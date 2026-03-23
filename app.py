@@ -795,7 +795,7 @@ that directly control spectral shape.
                              cmap="Greens", vmin=0.85, vmax=1.0)
         .background_gradient(subset=["Thickness MAE (nm)"],
                              cmap="Greens_r", vmin=2.0, vmax=4.0),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
