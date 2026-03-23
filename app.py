@@ -291,6 +291,14 @@ with tab2:
                                     format="%.3f", key="noise")
             st.caption("Simulates measurement noise on top of the "
                        "ideal TMM spectrum.")
+            if noise_level > 0.015:
+                st.warning(
+                    "High noise level: at std > 0.015, spectral "
+                    "information is heavily corrupted. Predictions will "
+                    "have large uncertainty and the refiner may not "
+                    "converge reliably. Consider that real instruments "
+                    "typically operate below std=0.005."
+                )
 
         has_true_params = True
         true_thick, true_n_val, true_k_val = gen_thick, gen_n, gen_k
@@ -344,11 +352,18 @@ with tab2:
                     st.pyplot(fig_dn)
                     plt.close(fig_dn)
                     st.info(
-                        "**Physics-aware denoiser:** trained jointly with "
-                        "the inverter to preserve spectral features that "
-                        "matter for parameter recovery. Recovers ~30% of "
-                        "noise-induced prediction error at std=0.010 vs "
-                        "~8% for a standard denoiser."
+                        "The denoiser improves the neural network's initial "
+                        "guess. The spectral refiner always optimizes against "
+                        "the original measured spectrum for maximum physical "
+                        "accuracy."
+                    )
+                    st.caption(
+                        "Note: the joint denoiser is optimized for parameter "
+                        "recovery accuracy, not visual smoothness. It reshapes "
+                        "spectral features to improve inversion rather than "
+                        "simply smoothing noise. At high noise levels the "
+                        "output may appear noisier than the input while still "
+                        "improving downstream predictions."
                     )
 
             means, stds, all_samples = predict_with_uncertainty(
@@ -361,11 +376,11 @@ with tab2:
             ci_n = 1.96 * std_n
             ci_k = 1.96 * std_k
 
-            # Optionally run refiner (on denoised spectrum if denoiser is on)
+            # Optionally run refiner (always against original raw spectrum)
             ref_result = None
             if use_refiner:
                 ref_result = refine_prediction(
-                    spectrum_for_model,
+                    input_spectrum,
                     float(pred_thick), float(pred_n), float(pred_k),
                     WAVELENGTHS
                 )
@@ -479,14 +494,16 @@ with tab2:
                                                display_k, WAVELENGTHS)
                           if ref_result is not None else None)
 
-            # Use the spectrum that was actually fed to the model
-            compare_spectrum = spectrum_for_model
-
+            # Residuals and overlay are always against the original raw spectrum
             col_p1, col_p2 = st.columns(2)
             with col_p1:
                 fig_ov, ax_ov = plt.subplots(figsize=(7, 4))
-                ax_ov.plot(WAVELENGTHS, compare_spectrum, "k-",
-                           label="Input (to model)", linewidth=1.5)
+                ax_ov.plot(WAVELENGTHS, input_spectrum, "k-",
+                           label="Original input", linewidth=1.5)
+                if use_denoiser:
+                    ax_ov.plot(WAVELENGTHS, spectrum_for_model,
+                               color="#9467bd", alpha=0.6,
+                               label="Denoised", linewidth=1)
                 ax_ov.plot(WAVELENGTHS, re_sim_nn, "--", color="#1f77b4",
                            label="NN re-simulated", linewidth=1.5)
                 if re_sim_ref is not None:
@@ -496,19 +513,19 @@ with tab2:
                 ax_ov.set_xlabel("Wavelength (nm)")
                 ax_ov.set_ylabel("Reflectance")
                 ax_ov.set_title("Input vs Re-simulated Spectrum")
-                ax_ov.legend()
+                ax_ov.legend(fontsize=8)
                 ax_ov.grid(True, alpha=0.3)
                 fig_ov.tight_layout()
                 st.pyplot(fig_ov)
                 plt.close(fig_ov)
 
             with col_p2:
-                residual_nn = compare_spectrum - re_sim_nn
+                residual_nn = input_spectrum - re_sim_nn
                 fig_res, ax_res = plt.subplots(figsize=(7, 4))
                 ax_res.plot(WAVELENGTHS, residual_nn, color="#1f77b4",
                             linewidth=1, label="NN residual")
                 if re_sim_ref is not None:
-                    residual_ref = compare_spectrum - re_sim_ref
+                    residual_ref = input_spectrum - re_sim_ref
                     ax_res.plot(WAVELENGTHS, residual_ref, color="#2ca02c",
                                 linewidth=1, label="Refined residual")
                 ax_res.axhline(0, color="gray", linestyle="--",
@@ -522,10 +539,10 @@ with tab2:
                 st.pyplot(fig_res)
                 plt.close(fig_res)
 
-            nn_mae = float(np.mean(np.abs(compare_spectrum - re_sim_nn)))
+            nn_mae = float(np.mean(np.abs(input_spectrum - re_sim_nn)))
             st.metric("NN Spectral MAE", f"{nn_mae:.6f}")
             if ref_result is not None:
-                ref_mae = float(np.mean(np.abs(compare_spectrum - re_sim_ref)))
+                ref_mae = float(np.mean(np.abs(input_spectrum - re_sim_ref)))
                 st.metric("Refined Spectral MAE", f"{ref_mae:.6f}")
 
             # Uncertainty analysis expander
