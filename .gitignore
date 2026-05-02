@@ -6,3 +6,4 @@ dataset_v2.npz
 __pycache__/
 *.pyc
 .env
+dump.py

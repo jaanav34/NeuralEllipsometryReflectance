@@ -44,8 +44,9 @@ class DenoisingAutoencoder(nn.Module):
 
 if __name__ == "__main__":
     import os
-    from tmm_simulator import simulate_reflectance_batch
-    from train import SpectraNet
+    from src.paths import artifact_path, ensure_parent_dir
+    from src.tmm_simulator import simulate_reflectance_batch
+    from src.spectranet import SpectraNet
 
     WAVELENGTHS = np.linspace(400, 800, 200).astype(np.float32)
 
@@ -58,8 +59,10 @@ if __name__ == "__main__":
     # 1. Training (skip if denoiser.pt exists)
     # ──────────────────────────────────────────────
 
-    if not os.path.exists("denoiser.pt"):
-        data = np.load("dataset_v2.npz")
+    denoiser_weights_path = artifact_path("models", "denoiser.pt")
+
+    if not os.path.exists(denoiser_weights_path):
+        data = np.load(artifact_path("data", "dataset_v2.npz"))
         X_all = data["X"].astype(np.float32)
 
         rng = np.random.default_rng(42)
@@ -135,7 +138,7 @@ if __name__ == "__main__":
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 epochs_without_improvement = 0
-                torch.save(model.state_dict(), "denoiser.pt")
+                torch.save(model.state_dict(), ensure_parent_dir(denoiser_weights_path))
             else:
                 epochs_without_improvement += 1
 
@@ -153,10 +156,10 @@ if __name__ == "__main__":
 
         print(f"\nBest validation loss: {best_val_loss:.6f}")
     else:
-        print("Found existing denoiser.pt, skipping training.")
+        print(f"Found existing {denoiser_weights_path}, skipping training.")
 
     # Load best weights for evaluation
-    model.load_state_dict(torch.load("denoiser.pt", weights_only=True,
+    model.load_state_dict(torch.load(denoiser_weights_path, weights_only=True,
                                      map_location=device))
     model.eval()
 
@@ -207,12 +210,12 @@ if __name__ == "__main__":
 
     # Load SpectraNet V4 and normalization stats
     spectranet = SpectraNet()
-    spectranet.load_state_dict(torch.load("spectranet_v4.pt",
+    spectranet.load_state_dict(torch.load(artifact_path("models", "spectranet_v4.pt"),
                                           map_location="cpu",
                                           weights_only=True))
     spectranet.eval()
 
-    norm_data = np.load("spectra_norm_v4.npz")
+    norm_data = np.load(artifact_path("data", "spectra_norm_v4.npz"))
     X_mean = norm_data["mean"]
     X_std = norm_data["std"]
 
@@ -303,5 +306,6 @@ if __name__ == "__main__":
     fig.suptitle("Denoiser Examples — OOD spectra (noise std = 0.010)",
                  fontsize=13, y=1.02)
     fig.tight_layout()
-    fig.savefig("denoiser_examples.png", dpi=150, bbox_inches="tight")
-    print("\nSaved denoiser_examples.png")
+    out_path = ensure_parent_dir(artifact_path("figures", "denoiser_examples.png"))
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"\nSaved {out_path}")

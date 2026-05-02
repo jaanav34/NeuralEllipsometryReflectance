@@ -69,22 +69,23 @@ This project models a single thin film on a silicon substrate at normal incidenc
 
 | File | Description |
 |------|-------------|
-| `app.py` | Streamlit UI: forward simulator, inverse predictor, model performance report |
-| `tmm_simulator.py` | TMM implementations: scalar NumPy, vectorized batch, differentiable PyTorch |
-| `refiner.py` | L-BFGS-B spectral residual optimizer with box constraints |
-| `denoiser.py` | Standard denoising autoencoder with OOD evaluation |
-| `denoiser_joint.py` | Physics-aware joint denoiser trained with frozen SpectraNet |
-| `train.py` | SpectraNet class definition and V1 training script |
-| `train_v2.py` | V2: BatchNorm, residual connections, consistency regularization |
-| `train_v3.py` | V3: V1 architecture on 500k stratified dataset |
-| `train_v4.py` | V4: differentiable physics-informed loss via PyTorch TMM |
-| `dataset_generator.py` | 100k uniform random dataset generator |
-| `dataset_generator_v2.py` | 500k stratified dataset generator |
-| `save_norm_stats.py` | Standalone script to regenerate normalization statistics |
-| `spectranet_v4.pt` | Best model weights (V4, 275k parameters) |
-| `denoiser.pt` | Standard denoiser weights |
-| `denoiser_joint.pt` | Joint denoiser weights |
-| `spectra_norm_v4.npz` | Input normalization statistics (mean, std from training set) |
+| `apps/app.py` | Streamlit UI: forward simulator, inverse predictor, model performance report |
+| `src/tmm_simulator.py` | TMM implementations: scalar NumPy, vectorized batch, differentiable PyTorch |
+| `src/refiner.py` | L-BFGS-B spectral residual optimizer with box constraints |
+| `src/denoiser.py` | Standard denoising autoencoder with OOD evaluation |
+| `scripts/denoiser_joint.py` | Physics-aware joint denoiser trained with frozen SpectraNet |
+| `src/spectranet.py` | SpectraNet model definition (shared by app + scripts) |
+| `scripts/train.py` | V1 training script |
+| `scripts/train_v2.py` | V2: BatchNorm, residual connections, consistency regularization |
+| `scripts/train_v3.py` | V3: V1 architecture on 500k stratified dataset |
+| `scripts/train_v4.py` | V4: differentiable physics-informed loss via PyTorch TMM |
+| `scripts/dataset_generator.py` | 100k uniform random dataset generator |
+| `scripts/dataset_generator_v2.py` | 500k stratified dataset generator |
+| `scripts/save_norm_stats.py` | Standalone script to regenerate normalization statistics |
+| `artifacts/models/spectranet_v4.pt` | Best model weights (V4, 275k parameters) |
+| `artifacts/models/denoiser.pt` | Standard denoiser weights |
+| `artifacts/models/denoiser_joint.pt` | Joint denoiser weights |
+| `artifacts/data/spectra_norm_v4.npz` | Input normalization statistics (mean, std from training set) |
 
 ## Running Locally
 
@@ -93,7 +94,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The app loads `spectranet_v4.pt`, `denoiser_joint.pt`, and `spectra_norm_v4.npz` at startup. Training scripts and dataset files are not required for the UI.
+The app loads `artifacts/models/spectranet_v4.pt`, `artifacts/models/denoiser_joint.pt`, and `artifacts/data/spectra_norm_v4.npz` at startup. Training scripts and dataset files are not required for the UI.
 
 ## Background
 

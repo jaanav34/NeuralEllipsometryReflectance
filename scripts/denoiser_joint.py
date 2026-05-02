@@ -12,9 +12,10 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 import time
 
-from denoiser import DenoisingAutoencoder
-from train import SpectraNet
-from tmm_simulator import simulate_reflectance_batch
+from src.paths import artifact_path, ensure_parent_dir
+from src.denoiser import DenoisingAutoencoder
+from src.spectranet import SpectraNet
+from src.tmm_simulator import simulate_reflectance_batch
 
 if __name__ == "__main__":
     WAVELENGTHS = np.linspace(400, 800, 200).astype(np.float32)
@@ -27,7 +28,7 @@ if __name__ == "__main__":
     # ──────────────────────────────────────────────
 
     denoiser = DenoisingAutoencoder().to(device)
-    denoiser.load_state_dict(torch.load("denoiser.pt", weights_only=True,
+    denoiser.load_state_dict(torch.load(artifact_path("models", "denoiser.pt"), weights_only=True,
                                         map_location=device))
     print(f"Denoiser parameters: "
           f"{sum(p.numel() for p in denoiser.parameters()):,}")
@@ -37,13 +38,13 @@ if __name__ == "__main__":
     # ──────────────────────────────────────────────
 
     model_v4 = SpectraNet().to(device)
-    model_v4.load_state_dict(torch.load("spectranet_v4.pt", weights_only=True,
+    model_v4.load_state_dict(torch.load(artifact_path("models", "spectranet_v4.pt"), weights_only=True,
                                         map_location=device))
     model_v4.eval()
     for p in model_v4.parameters():
         p.requires_grad = False
 
-    norm_data = np.load("spectra_norm_v4.npz")
+    norm_data = np.load(artifact_path("data", "spectra_norm_v4.npz"))
     X_mean_np = norm_data["mean"].astype(np.float32)
     X_std_np = norm_data["std"].astype(np.float32)
     X_mean_t = torch.from_numpy(X_mean_np).to(device)
@@ -60,7 +61,7 @@ if __name__ == "__main__":
     # 3. Data loading
     # ──────────────────────────────────────────────
 
-    data = np.load("dataset_v2.npz")
+    data = np.load(artifact_path("data", "dataset_v2.npz"))
     X_all = data["X"].astype(np.float32)
     y_all = data["y"].astype(np.float32)
 
@@ -174,7 +175,7 @@ if __name__ == "__main__":
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             epochs_without_improvement = 0
-            torch.save(denoiser.state_dict(), "denoiser_joint.pt")
+            torch.save(denoiser.state_dict(), ensure_parent_dir(artifact_path("models", "denoiser_joint.pt")))
         else:
             epochs_without_improvement += 1
 
@@ -214,13 +215,13 @@ if __name__ == "__main__":
 
     # Standard denoiser
     dae_std = DenoisingAutoencoder().to(device)
-    dae_std.load_state_dict(torch.load("denoiser.pt", weights_only=True,
+    dae_std.load_state_dict(torch.load(artifact_path("models", "denoiser.pt"), weights_only=True,
                                        map_location=device))
     dae_std.eval()
 
     # Joint denoiser
     dae_joint = DenoisingAutoencoder().to(device)
-    dae_joint.load_state_dict(torch.load("denoiser_joint.pt", weights_only=True,
+    dae_joint.load_state_dict(torch.load(artifact_path("models", "denoiser_joint.pt"), weights_only=True,
                                          map_location=device))
     dae_joint.eval()
 

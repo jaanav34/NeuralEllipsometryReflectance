@@ -6,9 +6,11 @@ to ensure physically interesting regions are well-represented.
 """
 
 import numpy as np
+
+from src.paths import artifact_path, ensure_parent_dir
 import time
 
-from tmm_simulator import simulate_reflectance_batch
+from src.tmm_simulator import simulate_reflectance_batch
 
 # Fixed wavelength grid shared by all samples
 WAVELENGTHS = np.linspace(400, 800, 200)
@@ -92,8 +94,9 @@ if __name__ == "__main__":
     X, y = generate_dataset()
 
     # Save to disk
-    np.savez("dataset_v2.npz", X=X, y=y)
-    print(f"\nSaved dataset_v2.npz")
+    out_path = ensure_parent_dir(artifact_path("data", "dataset_v2.npz"))
+    np.savez(out_path, X=X, y=y)
+    print(f"\nSaved {out_path}")
     print(f"  X shape: {X.shape}")
     print(f"  y shape: {y.shape}")
 

@@ -8,7 +8,7 @@ import numpy as np
 from scipy.optimize import minimize
 import time
 
-from tmm_simulator import simulate_reflectance, simulate_reflectance_batch
+from .tmm_simulator import simulate_reflectance, simulate_reflectance_batch
 
 # Default wavelength grid (must match training)
 DEFAULT_WAVELENGTHS = np.linspace(400, 800, 200)
@@ -106,17 +106,18 @@ def benchmark_refiner(n_samples=500, seed=42):
     Prints a clean comparison table.
     """
     import torch
-    from train import SpectraNet
+    from src.paths import artifact_path
+    from src.spectranet import SpectraNet
 
     # Load model
     model = SpectraNet()
-    model.load_state_dict(torch.load("spectranet_v4.pt",
+    model.load_state_dict(torch.load(artifact_path("models", "spectranet_v4.pt"),
                                      map_location="cpu",
                                      weights_only=True))
     model.eval()
 
     # Load norm stats
-    norm = np.load("spectra_norm_v4.npz")
+    norm = np.load(artifact_path("data", "spectra_norm_v4.npz"))
     X_mean, X_std = norm["mean"], norm["std"]
 
     PARAM_MIN = np.array([10.0, 1.3, 0.0], dtype=np.float32)
@@ -197,7 +198,8 @@ def benchmark_refiner(n_samples=500, seed=42):
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import torch
-    from train import SpectraNet
+    from src.paths import artifact_path
+    from src.spectranet import SpectraNet
 
     # --- Benchmark ---
     benchmark_refiner(n_samples=500)
@@ -214,11 +216,11 @@ if __name__ == "__main__":
 
     # NN prediction
     model = SpectraNet()
-    model.load_state_dict(torch.load("spectranet_v4.pt",
+    model.load_state_dict(torch.load(artifact_path("models", "spectranet_v4.pt"),
                                      map_location="cpu",
                                      weights_only=True))
     model.eval()
-    norm = np.load("spectra_norm_v4.npz")
+    norm = np.load(artifact_path("data", "spectra_norm_v4.npz"))
     X_mean, X_std = norm["mean"], norm["std"]
     PARAM_MIN = np.array([10.0, 1.3, 0.0], dtype=np.float32)
     PARAM_RANGE = np.array([290.0, 1.2, 0.5], dtype=np.float32)

@@ -2,7 +2,9 @@
 
 import numpy as np
 
-data = np.load("dataset_v2.npz")
+from src.paths import artifact_path, ensure_parent_dir
+
+data = np.load(artifact_path("data", "dataset_v2.npz"))
 X_all = data["X"].astype(np.float32)
 
 rng = np.random.default_rng(42)
@@ -14,6 +16,7 @@ X_mean = X_train.mean(axis=0)
 X_std = X_train.std(axis=0)
 X_std[X_std < 1e-8] = 1.0
 
-np.savez("spectra_norm_v4.npz", mean=X_mean, std=X_std)
-print("Saved spectra_norm_v4.npz")
+out_path = ensure_parent_dir(artifact_path("data", "spectra_norm_v4.npz"))
+np.savez(out_path, mean=X_mean, std=X_std)
+print(f"Saved {out_path}")
 print(f"  mean shape: {X_mean.shape}, std shape: {X_std.shape}")

@@ -7,10 +7,12 @@ as a .npz file suitable for supervised training.
 """
 
 import numpy as np
+
+from src.paths import artifact_path, ensure_parent_dir
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-from tmm_simulator import simulate_reflectance
+from src.tmm_simulator import simulate_reflectance
 
 # Fixed wavelength grid shared by all samples
 WAVELENGTHS = np.linspace(400, 800, 200)
@@ -63,8 +65,9 @@ if __name__ == "__main__":
     X, y = generate_dataset(num_samples=100_000)
 
     # Save to disk
-    np.savez("dataset.npz", X=X, y=y)
-    print(f"\nSaved dataset.npz")
+    out_path = ensure_parent_dir(artifact_path("data", "dataset.npz"))
+    np.savez(out_path, X=X, y=y)
+    print(f"\nSaved {out_path}")
     print(f"  X shape: {X.shape}")
     print(f"  y shape: {y.shape}")
 
