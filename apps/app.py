@@ -18,6 +18,11 @@ from src.tmm_simulator import simulate_reflectance
 from src.spectranet import SpectraNet
 from src.refiner import refine_prediction
 from src.denoiser import DenoisingAutoencoder
+from src.thinfilm_visualizer import (
+    make_visual_state,
+    render_prediction_cards,
+    render_thinfilm_visualizer,
+)
 
 # ──────────────────────────────────────────────
 # Constants
@@ -324,10 +329,20 @@ with tab2:
 
     if input_spectrum is not None:
         dae = load_denoiser()
-        use_denoiser = st.checkbox("Denoise spectrum first", value=True,
-                                   key="use_denoiser")
-        use_refiner = st.checkbox("Refine with spectral optimizer",
-                                  value=True, key="use_refiner")
+        
+        col_opts, col_dt1, col_dt2, col_dt3 = st.columns([1.2, 1, 1, 1])
+        with col_opts:
+            use_denoiser = st.checkbox("Denoise spectrum first", value=True, key="use_denoiser")
+            use_refiner = st.checkbox("Refine with spectral optimizer", value=True, key="use_refiner")
+        with col_dt1:
+            viz_layout = st.radio("Comparison view", ["Side-by-side", "Overlay"], horizontal=True, key="viz_layout", help="Side-by-side renders one panel per result. Overlay stacks them.")
+            viz_show_waves = st.checkbox("Animate sweep", value=True, key="viz_show_waves")
+        with col_dt2:
+            viz_thickness_scale = st.slider("Thickness exaggeration", 0.8, 3.0, 1.6, 0.1, key="viz_thickness_scale")
+            viz_speed = st.slider("Animation speed", 0.4, 2.5, 1.0, 0.1, key="viz_speed")
+        with col_dt3:
+            viz_show_uncertainty = st.checkbox("Show uncertainty shell", value=True, key="viz_show_uncertainty")
+            viz_show_rays = st.checkbox("Show incident/reflected rays", value=True, key="viz_show_rays")
 
         # Apply denoiser if requested
         if use_denoiser:
@@ -386,72 +401,111 @@ with tab2:
                     WAVELENGTHS
                 )
 
-            # --- Helper: colored CI badge ---
-            def _ci_badge(ci_val, std_val, fmt, thresholds):
-                """Return colored markdown for a CI badge."""
-                lo, hi = thresholds
-                text = f"\u00b1{ci_val:{fmt}}"
-                if std_val < lo:
-                    return f":green-background[{text}]"
-                elif std_val < hi:
-                    return f":orange-background[{text}]"
-                else:
-                    return f":red-background[{text}]"
-
-            # --- Show predicted parameters ---
-            st.subheader("Predicted Parameters")
-
-            ci_thick_badge = _ci_badge(ci_thick, std_thick, ".1f",
-                                       (5, 15))
-            ci_n_badge = _ci_badge(ci_n, std_n, ".4f", (0.05, 0.15))
-            ci_k_badge = _ci_badge(ci_k, std_k, ".4f", (0.01, 0.03))
-
-            # Row layout: one row per parameter, columns align across rows
-            # Determine how many columns per row
-            n_cols = 1  # always have NN
-            if has_true_params:
-                n_cols += 1
+            # --- Pre-compute metrics for Digital Twin ---
             if ref_result is not None:
-                n_cols += 1
+                display_thick = ref_result["thickness"]
+                display_n = ref_result["n"]
+                display_k = ref_result["k"]
+            else:
+                display_thick = float(pred_thick)
+                display_n = float(pred_n)
+                display_k = float(pred_k)
 
-            # Header row
-            hdr_cols = st.columns(n_cols)
-            idx = 0
-            if has_true_params:
-                hdr_cols[idx].markdown("**Your Parameters**")
-                idx += 1
-            hdr_cols[idx].markdown("**Neural Network**")
-            idx += 1
+            re_sim_nn = simulate_reflectance(float(pred_thick),
+                                             float(pred_n),
+                                             float(pred_k), WAVELENGTHS)
+            re_sim_ref = (simulate_reflectance(display_thick, display_n,
+                                               display_k, WAVELENGTHS)
+                          if ref_result is not None else None)
+
+            nn_mae = float(np.mean(np.abs(input_spectrum - re_sim_nn)))
+            ref_mae = None
             if ref_result is not None:
-                hdr_cols[idx].markdown("**NN + Refiner**")
+                ref_mae = float(np.mean(np.abs(input_spectrum - re_sim_ref)))
 
-            # Parameter rows: [true | NN value + CI | refiner]
-            param_rows = [
-                ("Thickness",
-                 f"{true_thick} nm" if has_true_params else None,
-                 f"{pred_thick:.1f} nm", ci_thick_badge,
-                 f"{ref_result['thickness']:.1f} nm" if ref_result else None),
-                ("Refractive index n",
-                 f"{true_n_val:.2f}" if has_true_params else None,
-                 f"{pred_n:.4f}", ci_n_badge,
-                 f"{ref_result['n']:.4f}" if ref_result else None),
-                ("Extinction coeff. k",
-                 f"{true_k_val:.3f}" if has_true_params else None,
-                 f"{pred_k:.4f}", ci_k_badge,
-                 f"{ref_result['k']:.4f}" if ref_result else None),
-            ]
+            # --- Thin-Film Digital Twin ---
+            viz_states = []
+            if has_true_params:
+                viz_states.append(
+                    make_visual_state(
+                        "Your Parameters",
+                        float(true_thick),
+                        float(true_n_val),
+                        float(true_k_val),
+                        role="truth",
+                    )
+                )
 
-            for label, true_val, nn_val, ci_badge, ref_val in param_rows:
-                row = st.columns(n_cols)
-                idx = 0
-                if has_true_params:
-                    row[idx].metric(label, true_val)
-                    idx += 1
-                row[idx].metric(label, nn_val)
-                row[idx].markdown(f"95% CI: {ci_badge}")
-                idx += 1
-                if ref_result is not None:
-                    row[idx].metric(label, ref_val)
+            viz_states.append(
+                make_visual_state(
+                    "Neural Network",
+                    float(pred_thick),
+                    float(pred_n),
+                    float(pred_k),
+                    ci_thickness=float(ci_thick),
+                    ci_n=float(ci_n),
+                    ci_k=float(ci_k),
+                    spectral_mae=nn_mae,
+                    role="nn",
+                    emphasis=(ref_result is None),
+                )
+            )
+
+            if ref_result is not None:
+                viz_states.append(
+                    make_visual_state(
+                        "NN + Refiner",
+                        float(ref_result["thickness"]),
+                        float(ref_result["n"]),
+                        float(ref_result["k"]),
+                        spectral_mae=ref_mae,
+                        role="refined",
+                        emphasis=True,
+                    )
+                )
+
+            primary_label = (
+                "NN + Refiner" if ref_result is not None else "Neural Network"
+            )
+
+            st.subheader("Predicted Parameters: Thin-Film Digital Twin")
+            twin_col, cards_col = st.columns([1.8, 1.2])
+            with twin_col:
+                render_thinfilm_visualizer(
+                    viz_states,
+                    layout=viz_layout,
+                    animation_speed=viz_speed,
+                    thickness_exaggeration=viz_thickness_scale,
+                    show_uncertainty=viz_show_uncertainty,
+                    show_wavelength_sweep=viz_show_waves,
+                    show_rays=viz_show_rays,
+                    height=560,
+                    key="inverse_digital_twin",
+                )
+                st.markdown(
+                    """
+                    <div style="font-size:0.9rem; line-height:1.55; color:#475569; padding:0.35rem 0.2rem 0 0.2rem;">
+                        <strong>Legend.</strong> Height encodes thickness, hue shifts with refractive index,
+                        darker films indicate larger extinction coefficient, and the translucent shell around
+                        the neural estimate visualizes the 95% thickness confidence interval.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with cards_col:
+                st.markdown(
+                    render_prediction_cards(
+                        viz_states,
+                        primary_label=primary_label,
+                    ),
+                    unsafe_allow_html=True,
+                )
+                
+
+            st.info(
+                "The digital twin is intentionally qualitative: it provides a fast visual readout of the "
+                "inferred film state while staying consistent with the underlying TMM model and spectral fit."
+            )
 
             # Refiner convergence info
             if ref_result is not None:
@@ -478,24 +532,6 @@ with tab2:
                 )
 
             # --- Spectral plots ---
-            # Use refined params if available, otherwise NN params
-            if ref_result is not None:
-                display_thick = ref_result["thickness"]
-                display_n = ref_result["n"]
-                display_k = ref_result["k"]
-            else:
-                display_thick = float(pred_thick)
-                display_n = float(pred_n)
-                display_k = float(pred_k)
-
-            re_sim_nn = simulate_reflectance(float(pred_thick),
-                                             float(pred_n),
-                                             float(pred_k), WAVELENGTHS)
-            re_sim_ref = (simulate_reflectance(display_thick, display_n,
-                                               display_k, WAVELENGTHS)
-                          if ref_result is not None else None)
-
-            # Residuals and overlay are always against the original raw spectrum
             col_p1, col_p2 = st.columns(2)
             with col_p1:
                 fig_ov, ax_ov = plt.subplots(figsize=(7, 4))
@@ -540,10 +576,8 @@ with tab2:
                 st.pyplot(fig_res)
                 plt.close(fig_res)
 
-            nn_mae = float(np.mean(np.abs(input_spectrum - re_sim_nn)))
             st.metric("NN Spectral MAE", f"{nn_mae:.6f}")
             if ref_result is not None:
-                ref_mae = float(np.mean(np.abs(input_spectrum - re_sim_ref)))
                 st.metric("Refined Spectral MAE", f"{ref_mae:.6f}")
 
             # Uncertainty analysis expander
