@@ -227,6 +227,7 @@ def run_speed_benchmark_pipeline(
     num_steps: int = 120,
     warmup_steps: int = 20,
     num_workers: int = 4,
+    verbose: bool = True,
 ) -> list[StageMetrics]:
     if not stages:
         raise ValueError("stages must not be empty")
@@ -245,9 +246,17 @@ def run_speed_benchmark_pipeline(
         torch.set_float32_matmul_precision("high")
 
     stage_runs: list[dict[str, float]] = []
-    for stage in stages:
+    total_stage_count = len(stages)
+    for stage_index, stage in enumerate(stages, start=1):
+        if verbose:
+            print(
+                f"[Stage {stage_index}/{total_stage_count}] {stage.name} "
+                f"(batch={stage.batch_size}, repeats={repeats})",
+                flush=True,
+            )
         per_repeat = []
-        for _ in range(repeats):
+        for repeat_index in range(1, repeats + 1):
+            repeat_start = time.perf_counter()
             metrics = _run_single_stage(
                 stage=stage,
                 device=device,
@@ -262,6 +271,15 @@ def run_speed_benchmark_pipeline(
                 wavelengths=wavelengths,
             )
             per_repeat.append(metrics)
+            if verbose:
+                repeat_elapsed = time.perf_counter() - repeat_start
+                print(
+                    f"  repeat {repeat_index}/{repeats}: "
+                    f"step_ms={metrics['step_ms']:.3f}, "
+                    f"samples/s={metrics['samples_per_sec']:.1f}, "
+                    f"elapsed={repeat_elapsed:.1f}s",
+                    flush=True,
+                )
 
         aggregated = {
             "stage_name": stage.name,
@@ -273,6 +291,12 @@ def run_speed_benchmark_pipeline(
             "samples_per_sec": float(mean(item["samples_per_sec"] for item in per_repeat)),
         }
         stage_runs.append(aggregated)
+        if verbose:
+            print(
+                f"  aggregated: step_ms={aggregated['mean_step_ms']:.3f}, "
+                f"samples/s={aggregated['samples_per_sec']:.1f}",
+                flush=True,
+            )
 
     baseline_step_ms = stage_runs[0]["mean_step_ms"]
     results: list[StageMetrics] = []

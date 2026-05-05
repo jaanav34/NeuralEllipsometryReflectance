@@ -10,6 +10,8 @@ Main upgrades over V4:
 6) optional physics loss throttling controls
 """
 
+import argparse
+import json
 import time
 from pathlib import Path
 import sys
@@ -30,7 +32,54 @@ from src.spectranet import SpectraNet
 from src.tmm_simulator import simulate_reflectance_torch_fast
 
 
+def load_profile(profile_name: str) -> dict[str, int | float | bool]:
+    if profile_name == "v4_1_safe":
+        return {
+            "BATCH_SIZE": 1024,
+            "NUM_WORKERS": 4,
+            "LAMBDA_PHYSICS": 0.05,
+            "MAX_EPOCHS": 300,
+            "EARLY_STOP_PATIENCE": 30,
+            "USE_AMP": False,
+            "USE_MODEL_COMPILE": False,
+            "PHYSICS_EVERY_N_BATCHES": 1,
+            "PHYSICS_START_EPOCH": 1,
+            "VALIDATE_EVERY": 1,
+            "MODEL_OUTPUT_NAME": "spectranet_v4_1.pt",
+            "SUMMARY_OUTPUT_NAME": "spectranet_v4_1_training_summary.json",
+        }
+    if profile_name == "v4_2_risky":
+        return {
+            "BATCH_SIZE": 1024,
+            "NUM_WORKERS": 4,
+            "LAMBDA_PHYSICS": 0.05,
+            "MAX_EPOCHS": 300,
+            "EARLY_STOP_PATIENCE": 30,
+            "USE_AMP": False,
+            "USE_MODEL_COMPILE": False,
+            "PHYSICS_EVERY_N_BATCHES": 2,
+            "PHYSICS_START_EPOCH": 10,
+            "VALIDATE_EVERY": 2,
+            "MODEL_OUTPUT_NAME": "spectranet_v4_2.pt",
+            "SUMMARY_OUTPUT_NAME": "spectranet_v4_2_training_summary.json",
+        }
+    raise ValueError(f"Unknown profile: {profile_name}")
+
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train SpectraNet V4.1/V4.2 profiles.")
+    parser.add_argument(
+        "--profile",
+        choices=["v4_1_safe", "v4_2_risky"],
+        default="v4_1_safe",
+        help="Training profile preset.",
+    )
+    parser.add_argument("--max-epochs", type=int, default=None, help="Override profile max epochs.")
+    parser.add_argument("--num-workers", type=int, default=None, help="Override dataloader workers.")
+    parser.add_argument("--batch-size", type=int, default=None, help="Override batch size.")
+    args = parser.parse_args()
+    profile = load_profile(args.profile)
+
     # 1) Data loading and preprocessing
     data = np.load(artifact_path("data", "dataset_v2.npz"))
     X_all = data["X"].astype(np.float32)
@@ -81,17 +130,24 @@ if __name__ == "__main__":
     y_test_norm = (y_test - param_min) / param_range
 
     # 2) Speed and training controls
-    BATCH_SIZE = 1024
-    NUM_WORKERS = 4
-    LAMBDA_PHYSICS = 0.05
-    MAX_EPOCHS = 300
-    EARLY_STOP_PATIENCE = 30
-
-    USE_AMP = False
-    USE_MODEL_COMPILE = False
-    PHYSICS_EVERY_N_BATCHES = 1
-    PHYSICS_START_EPOCH = 1
-    VALIDATE_EVERY = 1
+    BATCH_SIZE = int(profile["BATCH_SIZE"])
+    NUM_WORKERS = int(profile["NUM_WORKERS"])
+    LAMBDA_PHYSICS = float(profile["LAMBDA_PHYSICS"])
+    MAX_EPOCHS = int(profile["MAX_EPOCHS"])
+    EARLY_STOP_PATIENCE = int(profile["EARLY_STOP_PATIENCE"])
+    USE_AMP = bool(profile["USE_AMP"])
+    USE_MODEL_COMPILE = bool(profile["USE_MODEL_COMPILE"])
+    PHYSICS_EVERY_N_BATCHES = int(profile["PHYSICS_EVERY_N_BATCHES"])
+    PHYSICS_START_EPOCH = int(profile["PHYSICS_START_EPOCH"])
+    VALIDATE_EVERY = int(profile["VALIDATE_EVERY"])
+    MODEL_OUTPUT_NAME = str(profile["MODEL_OUTPUT_NAME"])
+    SUMMARY_OUTPUT_NAME = str(profile["SUMMARY_OUTPUT_NAME"])
+    if args.max_epochs is not None:
+        MAX_EPOCHS = args.max_epochs
+    if args.num_workers is not None:
+        NUM_WORKERS = args.num_workers
+    if args.batch_size is not None:
+        BATCH_SIZE = args.batch_size
 
     train_ds = TensorDataset(
         torch.from_numpy(X_train_norm),
@@ -186,11 +242,13 @@ if __name__ == "__main__":
 
     print(
         "Settings: "
+        f"profile={args.profile}, "
         f"batch={BATCH_SIZE}, amp={use_amp}, compile={USE_MODEL_COMPILE}, "
         f"physics_every={PHYSICS_EVERY_N_BATCHES}, physics_start={PHYSICS_START_EPOCH}, "
         f"validate_every={VALIDATE_EVERY}"
     )
 
+    total_train_start = time.time()
     for epoch in range(1, MAX_EPOCHS + 1):
         epoch_start = time.time()
         model.train()
@@ -278,7 +336,7 @@ if __name__ == "__main__":
                 epochs_without_improvement = 0
                 torch.save(
                     base_model.state_dict(),
-                    ensure_parent_dir(artifact_path("models", "spectranet_v4_1.pt")),
+                    ensure_parent_dir(artifact_path("models", MODEL_OUTPUT_NAME)),
                 )
             else:
                 epochs_without_improvement += 1
@@ -298,7 +356,9 @@ if __name__ == "__main__":
             )
             break
 
+    total_train_time = time.time() - total_train_start
     print(f"\nBest validation loss: {best_val_loss:.6f}")
+    print(f"Total training time: {total_train_time / 60:.2f} min")
 
     # 5) Evaluation
     def evaluate_model(net, loader):
@@ -326,7 +386,7 @@ if __name__ == "__main__":
 
     model_v4_1_eval = SpectraNet().to(device)
     model_v4_1_eval.load_state_dict(
-        torch.load(artifact_path("models", "spectranet_v4_1.pt"), weights_only=True)
+        torch.load(artifact_path("models", MODEL_OUTPUT_NAME), weights_only=True)
     )
     pred_v4_1, true_v4_1, mae_v4_1, r2_per_v4_1, r2_all_v4_1 = evaluate_model(
         model_v4_1_eval, test_loader
@@ -338,9 +398,9 @@ if __name__ == "__main__":
 
     labels = ["thickness (nm)", "n", "k"]
     print("\n" + "=" * 70)
-    print("V4 vs V4.1 (same test split, dataset_v2.npz)")
+    print(f"V4 vs {args.profile} (same test split, dataset_v2.npz)")
     print("  V4:   physics loss with complex128 TMM")
-    print("  V4.1: speed-up config with AMP + fast TMM")
+    print("  Variant: profile with fast TMM + transfer optimizations")
     print("=" * 70)
     print(
         f"  {'Parameter':20s} {'V4 MAE':>10s} {'V4.1 MAE':>10s} "
@@ -403,3 +463,29 @@ if __name__ == "__main__":
     out_path = ensure_parent_dir(artifact_path("figures", "parity_plot_v4_1.png"))
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"Saved {out_path}")
+
+    summary = {
+        "profile": args.profile,
+        "model_output_name": MODEL_OUTPUT_NAME,
+        "batch_size": BATCH_SIZE,
+        "num_workers": NUM_WORKERS,
+        "use_amp": use_amp,
+        "use_model_compile": USE_MODEL_COMPILE,
+        "physics_every_n_batches": PHYSICS_EVERY_N_BATCHES,
+        "physics_start_epoch": PHYSICS_START_EPOCH,
+        "validate_every": VALIDATE_EVERY,
+        "lambda_physics": LAMBDA_PHYSICS,
+        "best_val_loss": float(best_val_loss),
+        "total_train_minutes": float(total_train_time / 60),
+        "mae_thickness_nm": float(mae_v4_1[0]),
+        "mae_n": float(mae_v4_1[1]),
+        "mae_k": float(mae_v4_1[2]),
+        "r2_thickness": float(r2_per_v4_1[0]),
+        "r2_n": float(r2_per_v4_1[1]),
+        "r2_k": float(r2_per_v4_1[2]),
+        "r2_overall": float(r2_all_v4_1),
+    }
+    summary_path = ensure_parent_dir(artifact_path("benchmarks", SUMMARY_OUTPUT_NAME))
+    with open(summary_path, "w", encoding="utf-8") as f_summary:
+        json.dump(summary, f_summary, indent=2)
+    print(f"Saved training summary: {summary_path}")

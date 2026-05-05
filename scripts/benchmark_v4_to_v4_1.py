@@ -101,6 +101,7 @@ def main() -> None:
     parser.add_argument("--base-batch-size", type=int, default=512)
     parser.add_argument("--target-batch-size", type=int, default=1024)
     parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--quiet", action="store_true", help="Disable per-stage progress logs.")
     args = parser.parse_args()
 
     if args.batch_size is not None:
@@ -121,6 +122,7 @@ def main() -> None:
         num_steps=args.num_steps,
         warmup_steps=args.warmup_steps,
         num_workers=args.num_workers,
+        verbose=not args.quiet,
     )
     json_path, csv_path = save_benchmark_results(metrics, stages, output_stem=args.output_stem)
 
