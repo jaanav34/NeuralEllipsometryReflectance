@@ -17,7 +17,9 @@ from src.paths import artifact_path
 from src.tmm_simulator import simulate_reflectance
 from src.spectranet import SpectraNet
 from src.refiner import refine_prediction
+from src.robust_refiner import refine_prediction_guarded_multistart
 from src.denoiser import DenoisingAutoencoder
+from src.reliability import evaluate_identifiability
 from src.thinfilm_visualizer import (
     make_visual_state,
     render_prediction_cards,
@@ -329,11 +331,38 @@ with tab2:
 
     if input_spectrum is not None:
         dae = load_denoiser()
-        
+
+        default_denoiser = False
+        if has_true_params:
+            default_denoiser = float(noise_level) >= 0.003
+
         col_opts, col_dt1, col_dt2, col_dt3 = st.columns([1.2, 1, 1, 1])
         with col_opts:
-            use_denoiser = st.checkbox("Denoise spectrum first", value=True, key="use_denoiser")
+            use_denoiser = st.checkbox(
+                "Denoise spectrum first",
+                value=default_denoiser,
+                key="use_denoiser",
+            )
             use_refiner = st.checkbox("Refine with spectral optimizer", value=True, key="use_refiner")
+            use_guarded_refiner = st.checkbox(
+                "Use guarded refiner",
+                value=True,
+                key="use_guarded_refiner",
+                disabled=not use_refiner,
+                help=(
+                    "Guarded mode adds NN-prior regularization and trust-region bounds. "
+                    "It is safer in ambiguous inverse regimes."
+                ),
+            )
+            lambda_prior = st.slider(
+                "Refiner prior weight",
+                min_value=0.00,
+                max_value=0.40,
+                value=0.10,
+                step=0.01,
+                key="lambda_prior",
+                disabled=not (use_refiner and use_guarded_refiner),
+            )
         with col_dt1:
             viz_layout = st.radio("Comparison view", ["Side-by-side", "Overlay"], horizontal=True, key="viz_layout", help="Side-by-side renders one panel per result. Overlay stacks them.")
             viz_show_waves = st.checkbox("Animate sweep", value=True, key="viz_show_waves")
@@ -368,10 +397,10 @@ with tab2:
                     st.pyplot(fig_dn)
                     plt.close(fig_dn)
                     st.info(
-                        "The denoiser improves the neural network's initial "
-                        "guess. The spectral refiner always optimizes against "
-                        "the original measured spectrum for maximum physical "
-                        "accuracy."
+                        "The denoiser can improve the neural network initial "
+                        "guess when noise is meaningful. On very clean synthetic "
+                        "inputs it can sometimes shift the distribution, so it is "
+                        "now defaulted off for low-noise generated spectra."
                     )
                     st.caption(
                         "Note: the joint denoiser is optimized for parameter "
@@ -392,14 +421,45 @@ with tab2:
             ci_n = 1.96 * std_n
             ci_k = 1.96 * std_k
 
+            ident = evaluate_identifiability(
+                (float(pred_thick), float(pred_n), float(pred_k)),
+                (float(ci_thick), float(ci_n), float(ci_k)),
+                WAVELENGTHS,
+            )
+            ambiguous_inverse = bool(
+                ident.level == "Weak"
+                or float(pred_thick) < 50.0
+                or ident.fringe_estimate < 0.5
+                or ci_thick > 20.0
+                or ci_n > 0.15
+                or ci_k > 0.05
+            )
+
             # Optionally run refiner (always against original raw spectrum)
             ref_result = None
+            ref_alternatives = []
             if use_refiner:
-                ref_result = refine_prediction(
-                    input_spectrum,
-                    float(pred_thick), float(pred_n), float(pred_k),
-                    WAVELENGTHS
-                )
+                if use_guarded_refiner:
+                    guarded_bundle = refine_prediction_guarded_multistart(
+                        input_spectrum,
+                        float(pred_thick),
+                        float(pred_n),
+                        float(pred_k),
+                        ci95=np.array([ci_thick, ci_n, ci_k], dtype=np.float64),
+                        wavelengths=WAVELENGTHS,
+                        include_coarse_grid=ambiguous_inverse,
+                        trust_region=(40.0, 0.25, 0.10),
+                        lambda_prior=float(lambda_prior),
+                        max_alternatives=3,
+                    )
+                    ref_result = guarded_bundle.primary.to_dict()
+                    ref_alternatives = [alt.to_dict() for alt in guarded_bundle.alternatives]
+                else:
+                    ref_result = refine_prediction(
+                        input_spectrum,
+                        float(pred_thick), float(pred_n), float(pred_k),
+                        WAVELENGTHS
+                    )
 
             # --- Pre-compute metrics for Digital Twin ---
             if ref_result is not None:
@@ -528,8 +588,49 @@ with tab2:
                     "L-BFGS-B with physical box constraints. This "
                     "deterministic post-processing step typically reduces "
                     "the spectral residual by 90%+ and corrects small "
-                    "systematic biases in the NN prediction."
+                    "systematic biases in the NN prediction. A better "
+                    "spectral fit is not always a unique physical answer "
+                    "in low-identifiability regimes."
                 )
+
+            st.markdown("### Reliability Assessment")
+            level_color = {
+                "Strong": "🟢",
+                "Moderate": "🟠",
+                "Weak": "🔴",
+            }.get(ident.level, "🟠")
+            st.write(
+                f"{level_color} **Identifiability:** {ident.level} "
+                f"(score={ident.score:.2f}, cond={ident.condition_number:.0f})"
+            )
+            st.caption(
+                f"Fringe estimate: {ident.fringe_estimate:.2f} · "
+                f"smallest singular value: {ident.smallest_singular_value:.4e}"
+            )
+            for reason in ident.reasons:
+                st.write(f"- {reason}")
+
+            if ambiguous_inverse:
+                st.warning(
+                    "This spectrum is in an ambiguous inverse regime. "
+                    "A low spectral residual does not guarantee unique physical parameters."
+                )
+
+            if ref_alternatives:
+                st.markdown("**Alternative plausible fits**")
+                for idx_alt, alt in enumerate(ref_alternatives, 1):
+                    alt_sim = simulate_reflectance(
+                        float(alt["thickness"]),
+                        float(alt["n"]),
+                        float(alt["k"]),
+                        WAVELENGTHS,
+                    )
+                    alt_mae = float(np.mean(np.abs(input_spectrum - alt_sim)))
+                    st.write(
+                        f"{idx_alt}. d={alt['thickness']:.2f} nm, "
+                        f"n={alt['n']:.4f}, k={alt['k']:.4f}, "
+                        f"spectral MAE={alt_mae:.6f}"
+                    )
 
             # --- Spectral plots ---
             col_p1, col_p2 = st.columns(2)
