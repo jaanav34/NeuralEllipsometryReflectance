@@ -1,0 +1,21 @@
+{
+  "profile": "v4_1_safe",
+  "model_output_name": "spectranet_v4_1.pt",
+  "batch_size": 1024,
+  "num_workers": 4,
+  "use_amp": false,
+  "use_model_compile": false,
+  "physics_every_n_batches": 1,
+  "physics_start_epoch": 1,
+  "validate_every": 1,
+  "lambda_physics": 0.05,
+  "best_val_loss": 0.0025127465193718673,
+  "total_train_minutes": 14.039955739180247,
+  "mae_thickness_nm": 2.6680796146392822,
+  "mae_n": 0.04283595830202103,
+  "mae_k": 0.007155630271881819,
+  "r2_thickness": 0.996814489364624,
+  "r2_n": 0.921837329864502,
+  "r2_k": 0.9920783042907715,
+  "r2_overall": 0.9702433943748474
+}
