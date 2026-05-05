@@ -307,3 +307,34 @@ def failure_flags(
     if spectral_mae is not None:
         flags["good_spectrum_bad_params"] = (spectral_mae < 0.002) & flags["high_norm_error"]
     return flags
+
+
+def reliability_risk_proxy(
+    pred_params: np.ndarray,
+    ci95: np.ndarray,
+) -> np.ndarray:
+    """
+    Fast reliability proxy in [0, 1], where higher means higher risk.
+
+    This is batch-safe and cheap, so it can be used on million-sample scans.
+    It complements the local Jacobian-based identifiability score used in the app.
+    """
+    pred = np.asarray(pred_params, dtype=np.float32)
+    ci = np.asarray(ci95, dtype=np.float32)
+
+    ci_t = np.clip(ci[:, 0] / 20.0, 0.0, 2.0)
+    ci_n = np.clip(ci[:, 1] / 0.15, 0.0, 2.0)
+    ci_k = np.clip(ci[:, 2] / 0.05, 0.0, 2.0)
+
+    thickness_penalty = np.clip((50.0 - pred[:, 0]) / 50.0, 0.0, 1.0)
+    fringe = approx_visible_fringe_count(pred)
+    fringe_penalty = np.clip((0.5 - fringe) / 0.5, 0.0, 1.0)
+
+    weighted = (
+        0.30 * ci_t
+        + 0.30 * ci_n
+        + 0.15 * ci_k
+        + 0.15 * thickness_penalty
+        + 0.10 * fringe_penalty
+    )
+    return np.clip(weighted / 1.6, 0.0, 1.0).astype(np.float32)
