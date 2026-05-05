@@ -8,3 +8,4 @@ __pycache__/
 .env
 dump.py
 repo_dump.txt
+artifacts/tmp/

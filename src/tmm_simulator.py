@@ -92,7 +92,7 @@ def simulate_reflectance_batch(thicknesses, n_vals, k_vals, wavelengths_nm):
     """
     Vectorized TMM: compute reflectance spectra for a batch of films at once.
 
-    All intermediate arrays have shape (B, W) via broadcasting — no Python
+    All intermediate arrays have shape (B, W) via broadcasting, with no Python
     loops over batch or wavelength dimensions.
 
     Parameters
@@ -128,7 +128,7 @@ def simulate_reflectance_batch(thicknesses, n_vals, k_vals, wavelengths_nm):
     # Phase thickness: (B, 1) * (W,) → (B, W)
     delta = (2.0 * np.pi / wavelengths) * n_film * d  # (B, W)
 
-    # Characteristic matrix elements — all (B, W)
+    # Characteristic matrix elements, all (B, W)
     cos_d = np.cos(delta)
     sin_d = np.sin(delta)
     m11 = cos_d
@@ -146,7 +146,7 @@ def simulate_reflectance_batch(thicknesses, n_vals, k_vals, wavelengths_nm):
 
 def simulate_reflectance_torch(thicknesses, n_vals, k_vals, wavelengths):
     """
-    Differentiable TMM in pure PyTorch — gradients flow through all inputs.
+    Differentiable TMM in pure PyTorch. Gradients flow through all inputs.
 
     Implements the same Transfer Matrix Method as the numpy versions but
     using PyTorch complex tensors so autograd can compute d(reflectance)/d(params).
@@ -181,7 +181,7 @@ def simulate_reflectance_torch(thicknesses, n_vals, k_vals, wavelengths):
     # Phase thickness: (B, 1) * (1, W) → (B, W)
     delta = (2.0 * torch.pi / wl) * n_film * d  # (B, W)
 
-    # Characteristic matrix elements — all (B, W) complex
+    # Characteristic matrix elements, all (B, W) complex
     cos_d = torch.cos(delta)
     sin_d = torch.sin(delta)
     m11 = cos_d
@@ -198,6 +198,42 @@ def simulate_reflectance_torch(thicknesses, n_vals, k_vals, wavelengths):
     reflectance = torch.abs(r) ** 2
 
     return reflectance.float()
+
+
+def simulate_reflectance_torch_fast(thicknesses, n_vals, k_vals, wavelengths):
+    """
+    Faster differentiable TMM for training.
+
+    This version uses float32 and complex64 instead of float64 and complex128.
+    It is usually much faster on consumer GPUs while keeping useful precision
+    for neural network training losses.
+    """
+    import torch
+
+    device = thicknesses.device
+
+    n_air = torch.tensor(1.0 + 0.0j, dtype=torch.complex64, device=device)
+    n_si = torch.tensor(3.88 + 0.02j, dtype=torch.complex64, device=device)
+
+    n_film = torch.complex(n_vals.float(), k_vals.float()).unsqueeze(1)
+    d = thicknesses.float().unsqueeze(1)
+    wl = wavelengths.float().unsqueeze(0)
+
+    delta = (2.0 * torch.pi / wl) * n_film * d
+
+    cos_d = torch.cos(delta)
+    sin_d = torch.sin(delta)
+
+    m11 = cos_d
+    m12 = -1j * sin_d / n_film
+    m21 = -1j * n_film * sin_d
+    m22 = cos_d
+
+    numerator = (m11 + m12 * n_si) * n_air - (m21 + m22 * n_si)
+    denominator = (m11 + m12 * n_si) * n_air + (m21 + m22 * n_si)
+    r = numerator / denominator
+
+    return torch.abs(r) ** 2
 
 
 if __name__ == "__main__":

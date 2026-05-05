@@ -1,0 +1,146 @@
+{
+  "stages": [
+    {
+      "name": "baseline_v4_like",
+      "batch_size": 512,
+      "non_blocking_transfer": false,
+      "use_fast_tmm": false,
+      "use_amp": false,
+      "use_compile": false,
+      "physics_every_n_batches": 1
+    },
+    {
+      "name": "change_1_fast_tmm_c64",
+      "batch_size": 512,
+      "non_blocking_transfer": false,
+      "use_fast_tmm": true,
+      "use_amp": false,
+      "use_compile": false,
+      "physics_every_n_batches": 1
+    },
+    {
+      "name": "change_2_non_blocking_transfer",
+      "batch_size": 512,
+      "non_blocking_transfer": true,
+      "use_fast_tmm": true,
+      "use_amp": false,
+      "use_compile": false,
+      "physics_every_n_batches": 1
+    },
+    {
+      "name": "change_3_batch_1024",
+      "batch_size": 1024,
+      "non_blocking_transfer": true,
+      "use_fast_tmm": true,
+      "use_amp": false,
+      "use_compile": false,
+      "physics_every_n_batches": 1
+    },
+    {
+      "name": "change_4_amp_network",
+      "batch_size": 1024,
+      "non_blocking_transfer": true,
+      "use_fast_tmm": true,
+      "use_amp": true,
+      "use_compile": false,
+      "physics_every_n_batches": 1
+    },
+    {
+      "name": "change_5_compile_model",
+      "batch_size": 1024,
+      "non_blocking_transfer": true,
+      "use_fast_tmm": true,
+      "use_amp": true,
+      "use_compile": true,
+      "physics_every_n_batches": 1
+    },
+    {
+      "name": "optional_riskier_physics_every_2",
+      "batch_size": 1024,
+      "non_blocking_transfer": true,
+      "use_fast_tmm": true,
+      "use_amp": true,
+      "use_compile": true,
+      "physics_every_n_batches": 2
+    }
+  ],
+  "metrics": [
+    {
+      "stage_name": "baseline_v4_like",
+      "mean_step_ms": 11.762199999793665,
+      "std_step_ms": 0.0,
+      "mean_transfer_ms": 0.6220000000212167,
+      "mean_compute_ms": 4.3152999996891594,
+      "mean_optimize_ms": 6.824900000083289,
+      "samples_per_sec": 43529.271735643124,
+      "speedup_vs_baseline": 1.0,
+      "speedup_vs_previous": 1.0
+    },
+    {
+      "stage_name": "change_1_fast_tmm_c64",
+      "mean_step_ms": 9.413400000084948,
+      "std_step_ms": 0.0,
+      "mean_transfer_ms": 0.39790000028006034,
+      "mean_compute_ms": 2.884300000005169,
+      "mean_optimize_ms": 6.131199999799719,
+      "samples_per_sec": 54390.54964150887,
+      "speedup_vs_baseline": 1.2495166464494785,
+      "speedup_vs_previous": 1.2495166464494785
+    },
+    {
+      "stage_name": "change_2_non_blocking_transfer",
+      "mean_step_ms": 8.302199999889126,
+      "std_step_ms": 0.0,
+      "mean_transfer_ms": 0.2650999999787018,
+      "mean_compute_ms": 2.434100000300532,
+      "mean_optimize_ms": 5.602999999609892,
+      "samples_per_sec": 61670.4006175276,
+      "speedup_vs_baseline": 1.4167570041616375,
+      "speedup_vs_previous": 1.1338440413638147
+    },
+    {
+      "stage_name": "change_3_batch_1024",
+      "mean_step_ms": 10.43230000004769,
+      "std_step_ms": 0.0,
+      "mean_transfer_ms": 0.3311000000394415,
+      "mean_compute_ms": 4.0807000000313565,
+      "mean_optimize_ms": 6.020499999976892,
+      "samples_per_sec": 98156.68644453466,
+      "speedup_vs_baseline": 1.1274790793727074,
+      "speedup_vs_previous": 0.7958168380751296
+    },
+    {
+      "stage_name": "change_4_amp_network",
+      "mean_step_ms": 11.02549999995972,
+      "std_step_ms": 0.0,
+      "mean_transfer_ms": 0.44069999967177864,
+      "mean_compute_ms": 4.241999999976542,
+      "mean_optimize_ms": 6.342800000311399,
+      "samples_per_sec": 92875.60654879516,
+      "speedup_vs_baseline": 1.0668178313760497,
+      "speedup_vs_previous": 0.9461974513705321
+    },
+    {
+      "stage_name": "change_5_compile_model",
+      "mean_step_ms": 12.12260000011156,
+      "std_step_ms": 0.0,
+      "mean_transfer_ms": 0.29970000014145626,
+      "mean_compute_ms": 4.083999999693333,
+      "mean_optimize_ms": 7.738900000276772,
+      "samples_per_sec": 84470.32814664976,
+      "speedup_vs_baseline": 0.9702704040127877,
+      "speedup_vs_previous": 0.9094996122826997
+    },
+    {
+      "stage_name": "optional_riskier_physics_every_2",
+      "mean_step_ms": 6.78429999970831,
+      "std_step_ms": 0.0,
+      "mean_transfer_ms": 0.3193999996256025,
+      "mean_compute_ms": 2.1083999999973457,
+      "mean_optimize_ms": 4.3565000000853615,
+      "samples_per_sec": 150936.7215547701,
+      "speedup_vs_baseline": 1.7337381896878645,
+      "speedup_vs_previous": 1.7868608405631783
+    }
+  ]
+}

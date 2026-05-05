@@ -79,6 +79,8 @@ This project models a single thin film on a silicon substrate at normal incidenc
 | `scripts/train_v2.py` | V2: BatchNorm, residual connections, consistency regularization |
 | `scripts/train_v3.py` | V3: V1 architecture on 500k stratified dataset |
 | `scripts/train_v4.py` | V4: differentiable physics-informed loss via PyTorch TMM |
+| `scripts/train_v4.1.py` | V4.1: V4 with speed-focused training optimizations |
+| `scripts/benchmark_v4_to_v4_1.py` | Incremental benchmark pipeline for V4 to V4.1 speed changes |
 | `scripts/dataset_generator.py` | 100k uniform random dataset generator |
 | `scripts/dataset_generator_v2.py` | 500k stratified dataset generator |
 | `scripts/save_norm_stats.py` | Standalone script to regenerate normalization statistics |
