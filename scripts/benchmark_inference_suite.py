@@ -8,9 +8,15 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
+import sys
 from typing import Any
 
 import numpy as np
+import torch
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from src.inference_pipeline import (
     PARAM_NAMES,
@@ -28,7 +34,11 @@ from src.inference_pipeline import (
     spectral_mae_for_params,
 )
 from src.paths import artifact_path, ensure_parent_dir
-from src.robust_refiner import refine_prediction_diagnostic, refine_prediction_multistart
+from src.robust_refiner import (
+    refine_prediction_batch_gpu,
+    refine_prediction_diagnostic,
+    refine_prediction_multistart,
+)
 from src.tmm_simulator import simulate_reflectance
 
 
@@ -91,6 +101,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--refiner-workers", type=int, default=0, help="0 means serial. Processes are CPU-only.")
     p.add_argument("--robust-refiner", action="store_true", help="Use deterministic multi-start refiner on selected cases.")
     p.add_argument("--coarse-grid-on-top", type=int, default=25, help="Run coarse-grid multi-start on top N failures only.")
+    p.add_argument("--gpu-refiner", action="store_true", help="Use batched GPU refiner for selected cases.")
+    p.add_argument("--gpu-refiner-steps", type=int, default=120, help="Optimization steps for GPU refiner.")
+    p.add_argument("--gpu-refiner-lr", type=float, default=0.05, help="Learning rate for GPU refiner.")
+    p.add_argument("--gpu-refiner-chunk-size", type=int, default=2048, help="Chunk size for GPU refiner.")
     p.add_argument("--output-stem", default="inference_stress_v4")
     p.add_argument("--top-k-failures", type=int, default=250)
     p.add_argument("--include-probes", action="store_true", help="Include hard-coded examples from manual app testing.")
@@ -189,11 +203,38 @@ def run_refiner_subset(
     robust: bool,
     coarse_grid_on_top: int,
     workers: int,
+    use_gpu_refiner: bool,
+    gpu_refiner_steps: int,
+    gpu_refiner_lr: float,
+    gpu_refiner_chunk_size: int,
 ) -> tuple[np.ndarray, list[dict[str, Any]]]:
     refined = np.full((len(spectra), 3), np.nan, dtype=np.float32)
     records: list[dict[str, Any]] = []
     selected_set = list(map(int, selected))
     if not selected_set:
+        return refined, records
+
+    if use_gpu_refiner:
+        t0 = time.perf_counter()
+        subset_spectra = spectra[selected_set].astype(np.float32, copy=False)
+        subset_init = nn_params[selected_set].astype(np.float32, copy=False)
+        refined_subset, subset_records = refine_prediction_batch_gpu(
+            subset_spectra,
+            subset_init,
+            WAVELENGTHS,
+            steps=gpu_refiner_steps,
+            lr=gpu_refiner_lr,
+            chunk_size=gpu_refiner_chunk_size,
+            device="cuda",
+            accept_only_if_improves=True,
+        )
+        for local_i, idx in enumerate(selected_set):
+            refined[idx] = refined_subset[local_i]
+            subset_records[local_i]["sample_index"] = int(idx)
+        records.extend(subset_records)
+        elapsed = time.perf_counter() - t0
+        rate = len(selected_set) / max(elapsed, 1e-9)
+        print(f"  refined {len(selected_set):,}/{len(selected_set):,} cases ({rate:.1f}/s)", flush=True)
         return refined, records
 
     payloads = []
@@ -343,6 +384,9 @@ def main() -> int:
     args = parse_args()
     rng = np.random.default_rng(args.seed)
 
+    if args.gpu_refiner and not torch.cuda.is_available():
+        raise RuntimeError("GPU refiner requested but CUDA is not available on this machine.")
+
     out_dir = ensure_parent_dir(artifact_path("benchmarks", args.output_stem, "dummy.txt")).parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -362,6 +406,12 @@ def main() -> int:
     print(f"mc samples: {args.mc_samples}")
     print(f"denoiser: {not args.no_denoiser}")
     print(f"refine strategy: {args.refine_strategy}, max_refine={args.max_refine}, robust={args.robust_refiner}")
+    if args.gpu_refiner:
+        print(
+            "gpu refiner: "
+            f"enabled, steps={args.gpu_refiner_steps}, lr={args.gpu_refiner_lr}, "
+            f"chunk={args.gpu_refiner_chunk_size}"
+        )
     print("=" * 100, flush=True)
 
     bundle = load_bundle(device=args.device, load_denoiser=not args.no_denoiser)
@@ -422,6 +472,10 @@ def main() -> int:
                 robust=args.robust_refiner,
                 coarse_grid_on_top=args.coarse_grid_on_top,
                 workers=args.refiner_workers,
+                use_gpu_refiner=args.gpu_refiner,
+                gpu_refiner_steps=args.gpu_refiner_steps,
+                gpu_refiner_lr=args.gpu_refiner_lr,
+                gpu_refiner_chunk_size=args.gpu_refiner_chunk_size,
             )
             print("  computing refined spectral residuals...", flush=True)
             ref_spectral_mae[selected] = spectral_mae_for_params(

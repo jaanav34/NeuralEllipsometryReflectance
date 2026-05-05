@@ -17,8 +17,13 @@ from typing import Iterable
 
 import numpy as np
 from scipy.optimize import minimize
+import torch
 
-from src.tmm_simulator import simulate_reflectance, simulate_reflectance_batch
+from src.tmm_simulator import (
+    simulate_reflectance,
+    simulate_reflectance_batch,
+    simulate_reflectance_torch_fast,
+)
 
 PARAM_BOUNDS_LIST = [(10.0, 300.0), (1.3, 2.5), (0.0, 0.5)]
 PARAM_MIN = np.array([10.0, 1.3, 0.0], dtype=np.float64)
@@ -218,3 +223,123 @@ def refine_prediction_multistart(
     ]
     best = min(results, key=lambda r: r.final_residual)
     return best
+
+
+def refine_prediction_batch_gpu(
+    spectra: np.ndarray,
+    init_params: np.ndarray,
+    wavelengths: np.ndarray = DEFAULT_WAVELENGTHS,
+    *,
+    steps: int = 120,
+    lr: float = 0.05,
+    chunk_size: int = 2048,
+    device: str = "cuda",
+    accept_only_if_improves: bool = True,
+) -> tuple[np.ndarray, list[dict[str, float | int | bool | str]]]:
+    """
+    Fast batched GPU refiner for benchmark workloads.
+
+    This is not the exact same optimizer as CPU L-BFGS-B. It uses Adam on a
+    sigmoid-parameterized bounded space to refine many samples in parallel.
+    """
+    if len(spectra) != len(init_params):
+        raise ValueError("spectra and init_params must have the same length")
+    if len(spectra) == 0:
+        return np.empty((0, 3), dtype=np.float32), []
+
+    dev = torch.device(device if device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
+    if dev.type != "cuda":
+        raise ValueError("GPU refiner requires CUDA. Use CPU refiner when CUDA is unavailable.")
+
+    lower_np = PARAM_MIN.astype(np.float32)
+    upper_np = PARAM_MAX.astype(np.float32)
+    range_np = PARAM_RANGE.astype(np.float32)
+
+    wl_t = torch.from_numpy(np.asarray(wavelengths, dtype=np.float32)).to(dev)
+    refined_all = np.empty((len(spectra), 3), dtype=np.float32)
+    records: list[dict[str, float | int | bool | str]] = []
+
+    eps = 1e-4
+    n_total = len(spectra)
+    for start in range(0, n_total, chunk_size):
+        end = min(start + chunk_size, n_total)
+        target_np = np.asarray(spectra[start:end], dtype=np.float32)
+        init_np = _clip_params(np.asarray(init_params[start:end], dtype=np.float64)).astype(np.float32)
+        batch_size_now = len(target_np)
+
+        target_t = torch.from_numpy(target_np).to(dev)
+        init_t = torch.from_numpy(init_np).to(dev)
+        lower_t = torch.from_numpy(lower_np).to(dev)
+        range_t = torch.from_numpy(range_np).to(dev)
+
+        with torch.no_grad():
+            init_sim = simulate_reflectance_torch_fast(init_t[:, 0], init_t[:, 1], init_t[:, 2], wl_t)
+            init_residual_t = torch.mean((init_sim - target_t) ** 2, dim=1)
+
+        scaled = torch.clamp((init_t - lower_t) / range_t, eps, 1.0 - eps)
+        latent = torch.logit(scaled).detach().clone().requires_grad_(True)
+        optimizer = torch.optim.Adam([latent], lr=lr)
+
+        best_residual_t = init_residual_t.detach().clone()
+        best_params_t = init_t.detach().clone()
+
+        for _ in range(steps):
+            optimizer.zero_grad(set_to_none=True)
+            params_t = lower_t + torch.sigmoid(latent) * range_t
+            sim_t = simulate_reflectance_torch_fast(params_t[:, 0], params_t[:, 1], params_t[:, 2], wl_t)
+            residual_t = torch.mean((sim_t - target_t) ** 2, dim=1)
+            loss_t = residual_t.mean()
+            loss_t.backward()
+            optimizer.step()
+
+            with torch.no_grad():
+                improved = residual_t < best_residual_t
+                best_residual_t[improved] = residual_t[improved]
+                best_params_t[improved] = params_t[improved]
+
+        best_params_np = best_params_t.detach().cpu().numpy().astype(np.float32)
+        best_residual_np = best_residual_t.detach().cpu().numpy().astype(np.float64)
+        init_residual_np = init_residual_t.detach().cpu().numpy().astype(np.float64)
+
+        for i in range(batch_size_now):
+            idx = start + i
+            init_val = float(init_residual_np[i])
+            best_val = float(best_residual_np[i])
+            accepted = True
+            rejected_reason = ""
+            final_params = best_params_np[i]
+            final_val = best_val
+            if accept_only_if_improves and best_val > init_val:
+                accepted = False
+                rejected_reason = "final residual worse than initial residual"
+                final_params = init_np[i]
+                final_val = init_val
+
+            improvement = (1.0 - final_val / init_val) * 100.0 if init_val > 0 else 0.0
+            p = np.asarray(final_params, dtype=np.float64)
+            eps_b = np.array([1e-5, 1e-6, 1e-6], dtype=np.float64)
+            hit_lower = bool(np.any(np.isclose(p, PARAM_MIN, atol=eps_b)))
+            hit_upper = bool(np.any(np.isclose(p, PARAM_MAX, atol=eps_b)))
+
+            refined_all[idx] = final_params
+            records.append(
+                {
+                    "thickness": float(final_params[0]),
+                    "n": float(final_params[1]),
+                    "k": float(final_params[2]),
+                    "success": True,
+                    "n_iterations": int(steps),
+                    "init_residual": init_val,
+                    "final_residual": final_val,
+                    "improvement": float(improvement),
+                    "objective_calls": int(steps + 1),
+                    "start_index": 0,
+                    "accepted": bool(accepted),
+                    "rejected_reason": rejected_reason,
+                    "hit_lower_bound": hit_lower,
+                    "hit_upper_bound": hit_upper,
+                    "sample_index": int(idx),
+                }
+            )
+
+    return refined_all, records
