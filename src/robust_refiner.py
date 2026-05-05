@@ -56,6 +56,24 @@ class RefinerResult:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class GuardedRefinerBundle:
+    primary: RefinerResult
+    alternatives: tuple[RefinerResult, ...]
+    objective_mode: str
+    lambda_prior: float
+    trust_region: tuple[float, float, float]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "primary": self.primary.to_dict(),
+            "alternatives": [alt.to_dict() for alt in self.alternatives],
+            "objective_mode": self.objective_mode,
+            "lambda_prior": self.lambda_prior,
+            "trust_region": self.trust_region,
+        }
+
+
 def _clip_params(x: np.ndarray) -> np.ndarray:
     return np.minimum(np.maximum(np.asarray(x, dtype=np.float64), PARAM_MIN), PARAM_MAX)
 
@@ -69,6 +87,116 @@ def objective_for_spectrum(spectrum: np.ndarray, wavelengths: np.ndarray):
         return float(np.mean((spectrum64 - sim) ** 2))
 
     return objective
+
+
+def _effective_ci(ci95: np.ndarray | None) -> np.ndarray:
+    if ci95 is None:
+        return np.array([20.0, 0.15, 0.05], dtype=np.float64)
+    ci = np.asarray(ci95, dtype=np.float64)
+    floor = np.array([5.0, 0.03, 0.01], dtype=np.float64)
+    return np.maximum(np.abs(ci), floor)
+
+
+def objective_for_spectrum_guarded(
+    spectrum: np.ndarray,
+    wavelengths: np.ndarray,
+    anchor_params: np.ndarray,
+    ci95: np.ndarray | None = None,
+    lambda_prior: float = 0.10,
+):
+    """
+    Guarded objective:
+      spectral_mse + lambda_prior * spectral_scale * normalized_prior_distance
+    """
+    spectrum64 = np.asarray(spectrum, dtype=np.float64)
+    anchor = _clip_params(np.asarray(anchor_params, dtype=np.float64))
+    ci = _effective_ci(ci95)
+
+    sim_anchor = simulate_reflectance(anchor[0], anchor[1], anchor[2], wavelengths)
+    spectral_scale = float(np.mean((spectrum64 - sim_anchor) ** 2) + 1e-10)
+
+    def objective(params: np.ndarray) -> float:
+        p = _clip_params(params)
+        sim = simulate_reflectance(p[0], p[1], p[2], wavelengths)
+        spectral = float(np.mean((spectrum64 - sim) ** 2))
+        prior = float(np.mean(((p - anchor) / ci) ** 2))
+        return spectral + float(lambda_prior) * spectral_scale * prior
+
+    return objective
+
+
+def _trust_region_bounds(anchor_params: np.ndarray, trust_region: tuple[float, float, float]) -> list[tuple[float, float]]:
+    anchor = _clip_params(np.asarray(anchor_params, dtype=np.float64))
+    trust = np.asarray(trust_region, dtype=np.float64)
+    lo = np.maximum(PARAM_MIN, anchor - trust)
+    hi = np.minimum(PARAM_MAX, anchor + trust)
+    lo = np.minimum(lo, hi)
+    return [(float(lo[i]), float(hi[i])) for i in range(3)]
+
+
+def refine_from_start_guarded(
+    spectrum: np.ndarray,
+    start: np.ndarray,
+    *,
+    anchor_params: np.ndarray,
+    ci95: np.ndarray | None = None,
+    lambda_prior: float = 0.10,
+    trust_region: tuple[float, float, float] = (40.0, 0.25, 0.10),
+    wavelengths: np.ndarray = DEFAULT_WAVELENGTHS,
+    start_index: int = 0,
+    maxiter: int = 220,
+) -> RefinerResult:
+    start = _clip_params(start)
+    anchor = _clip_params(np.asarray(anchor_params, dtype=np.float64))
+    objective = objective_for_spectrum_guarded(
+        spectrum,
+        wavelengths,
+        anchor,
+        ci95=ci95,
+        lambda_prior=lambda_prior,
+    )
+    init_residual = objective(anchor)
+    bounds = _trust_region_bounds(anchor, trust_region)
+
+    calls = 0
+
+    def counted_objective(params: np.ndarray) -> float:
+        nonlocal calls
+        calls += 1
+        return objective(params)
+
+    x0 = np.minimum(np.maximum(start, np.array([b[0] for b in bounds])), np.array([b[1] for b in bounds]))
+    res = minimize(
+        counted_objective,
+        x0,
+        method="L-BFGS-B",
+        bounds=bounds,
+        options={"maxiter": maxiter, "ftol": 1e-12, "gtol": 1e-8},
+    )
+
+    x = _clip_params(res.x)
+    final_residual = float(res.fun)
+    improvement = (1.0 - final_residual / init_residual) * 100.0 if init_residual > 0 else 0.0
+    eps = np.array([1e-5, 1e-6, 1e-6], dtype=np.float64)
+    hit_lower = bool(np.any(np.isclose(x, PARAM_MIN, atol=eps)))
+    hit_upper = bool(np.any(np.isclose(x, PARAM_MAX, atol=eps)))
+
+    return RefinerResult(
+        thickness=float(x[0]),
+        n=float(x[1]),
+        k=float(x[2]),
+        success=bool(res.success),
+        n_iterations=int(res.nit),
+        init_residual=float(init_residual),
+        final_residual=float(final_residual),
+        improvement=float(improvement),
+        objective_calls=int(calls),
+        start_index=int(start_index),
+        accepted=True,
+        rejected_reason="",
+        hit_lower_bound=hit_lower,
+        hit_upper_bound=hit_upper,
+    )
 
 
 def refine_from_start(
@@ -223,6 +351,76 @@ def refine_prediction_multistart(
     ]
     best = min(results, key=lambda r: r.final_residual)
     return best
+
+
+def refine_prediction_guarded_multistart(
+    spectrum: np.ndarray,
+    init_thickness: float,
+    init_n: float,
+    init_k: float,
+    *,
+    ci95: np.ndarray | None = None,
+    wavelengths: np.ndarray = DEFAULT_WAVELENGTHS,
+    include_coarse_grid: bool = False,
+    trust_region: tuple[float, float, float] = (40.0, 0.25, 0.10),
+    lambda_prior: float = 0.10,
+    maxiter: int = 220,
+    max_alternatives: int = 3,
+) -> GuardedRefinerBundle:
+    """
+    Multi-start guarded refiner that returns a primary and alternatives.
+
+    This intentionally keeps CPU L-BFGS-B for numerical consistency.
+    It could be faster with a fully GPU multi-start second-order solver,
+    but that adds complexity and less deterministic behavior in this path.
+    """
+    anchor = np.array([init_thickness, init_n, init_k], dtype=np.float64)
+    starts = [s for s in local_start_cloud(anchor)]
+    if include_coarse_grid:
+        starts.extend([s for s in coarse_grid_starts(spectrum, wavelengths=wavelengths)])
+
+    results = [
+        refine_from_start_guarded(
+            spectrum,
+            s,
+            anchor_params=anchor,
+            ci95=ci95,
+            lambda_prior=lambda_prior,
+            trust_region=trust_region,
+            wavelengths=wavelengths,
+            start_index=i,
+            maxiter=maxiter,
+        )
+        for i, s in enumerate(starts)
+    ]
+    ranked = sorted(results, key=lambda r: r.final_residual)
+
+    unique: list[RefinerResult] = []
+    for candidate in ranked:
+        if not unique:
+            unique.append(candidate)
+            continue
+        c = candidate.params()
+        duplicate = False
+        for existing in unique:
+            d = np.abs(c - existing.params())
+            if bool((d[0] < 1.0) and (d[1] < 0.01) and (d[2] < 0.01)):
+                duplicate = True
+                break
+        if not duplicate:
+            unique.append(candidate)
+        if len(unique) >= max(1, max_alternatives):
+            break
+
+    primary = unique[0]
+    alternatives = tuple(unique[1:])
+    return GuardedRefinerBundle(
+        primary=primary,
+        alternatives=alternatives,
+        objective_mode="spectral_plus_prior",
+        lambda_prior=float(lambda_prior),
+        trust_region=tuple(float(v) for v in trust_region),
+    )
 
 
 def refine_prediction_batch_gpu(
