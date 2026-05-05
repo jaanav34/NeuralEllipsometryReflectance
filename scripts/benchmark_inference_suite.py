@@ -30,11 +30,13 @@ from src.inference_pipeline import (
     load_bundle,
     normalized_abs_error,
     predict_app_style_batch,
+    reliability_risk_proxy,
     simulate_params,
     spectral_mae_for_params,
 )
 from src.paths import artifact_path, ensure_parent_dir
 from src.robust_refiner import (
+    refine_prediction_guarded_multistart,
     refine_prediction_batch_gpu,
     refine_prediction_diagnostic,
     refine_prediction_multistart,
@@ -105,6 +107,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gpu-refiner-steps", type=int, default=120, help="Optimization steps for GPU refiner.")
     p.add_argument("--gpu-refiner-lr", type=float, default=0.05, help="Learning rate for GPU refiner.")
     p.add_argument("--gpu-refiner-chunk-size", type=int, default=2048, help="Chunk size for GPU refiner.")
+    p.add_argument("--guarded-refiner", action="store_true", help="Use prior-regularized multi-start refiner.")
+    p.add_argument("--guarded-prior-lambda", type=float, default=0.10, help="Prior weight for guarded refiner.")
+    p.add_argument(
+        "--guarded-trust-region",
+        type=float,
+        nargs=3,
+        metavar=("DT", "DN", "DK"),
+        default=[40.0, 0.25, 0.10],
+        help="Trust-region half-widths for thickness, n, and k in guarded refiner.",
+    )
+    p.add_argument("--pipeline-label", default="default", help="Label saved in summary outputs for matrix runs.")
     p.add_argument("--output-stem", default="inference_stress_v4")
     p.add_argument("--top-k-failures", type=int, default=250)
     p.add_argument("--include-probes", action="store_true", help="Include hard-coded examples from manual app testing.")
@@ -174,8 +187,36 @@ def select_refine_indices(
     return selected.astype(np.int64)
 
 
-def _refine_worker(payload: tuple[int, np.ndarray, np.ndarray, bool, bool]) -> tuple[int, dict[str, Any]]:
-    idx, spectrum, init, robust, coarse = payload
+def _refine_worker(
+    payload: tuple[
+        int,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        bool,
+        bool,
+        bool,
+        float,
+        tuple[float, float, float],
+    ]
+) -> tuple[int, dict[str, Any]]:
+    idx, spectrum, init, ci95, robust, coarse, guarded, prior_lambda, trust_region = payload
+    if guarded:
+        bundle = refine_prediction_guarded_multistart(
+            spectrum,
+            float(init[0]),
+            float(init[1]),
+            float(init[2]),
+            ci95=ci95,
+            wavelengths=WAVELENGTHS,
+            include_coarse_grid=coarse,
+            trust_region=trust_region,
+            lambda_prior=prior_lambda,
+            max_alternatives=3,
+        )
+        res_dict = bundle.primary.to_dict()
+        res_dict["n_alternatives"] = len(bundle.alternatives)
+        return idx, res_dict
     if robust:
         res = refine_prediction_multistart(
             spectrum,
@@ -200,7 +241,11 @@ def run_refiner_subset(
     spectra: np.ndarray,
     nn_params: np.ndarray,
     selected: np.ndarray,
+    ci95: np.ndarray,
     robust: bool,
+    guarded: bool,
+    guarded_prior_lambda: float,
+    guarded_trust_region: tuple[float, float, float],
     coarse_grid_on_top: int,
     workers: int,
     use_gpu_refiner: bool,
@@ -240,7 +285,19 @@ def run_refiner_subset(
     payloads = []
     for rank, idx in enumerate(selected_set):
         coarse = bool(robust and rank < coarse_grid_on_top)
-        payloads.append((idx, spectra[idx].astype(np.float64), nn_params[idx].astype(np.float64), robust, coarse))
+        payloads.append(
+            (
+                idx,
+                spectra[idx].astype(np.float64),
+                nn_params[idx].astype(np.float64),
+                ci95[idx].astype(np.float64),
+                robust,
+                coarse,
+                guarded,
+                float(guarded_prior_lambda),
+                guarded_trust_region,
+            )
+        )
 
     t0 = time.perf_counter()
     if workers and workers > 1:
@@ -406,6 +463,8 @@ def main() -> int:
     print(f"mc samples: {args.mc_samples}")
     print(f"denoiser: {not args.no_denoiser}")
     print(f"refine strategy: {args.refine_strategy}, max_refine={args.max_refine}, robust={args.robust_refiner}")
+    print(f"guarded refiner: {args.guarded_refiner} (lambda={args.guarded_prior_lambda})")
+    print(f"pipeline label: {args.pipeline_label}")
     if args.gpu_refiner:
         print(
             "gpu refiner: "
@@ -448,6 +507,7 @@ def main() -> int:
         nn_spectral_mae = spectral_mae_for_params(spectra, pred.nn_mean, WAVELENGTHS, batch_size=args.batch_size)
         nn_metrics = aggregate_param_metrics(pred.nn_mean, true_params)
         nn_flags = failure_flags(pred.nn_mean, true_params, ci95=pred.nn_ci95, spectral_mae=nn_spectral_mae)
+        nn_risk = reliability_risk_proxy(pred.nn_mean, pred.nn_ci95)
 
         selected = select_refine_indices(
             args.refine_strategy,
@@ -469,7 +529,11 @@ def main() -> int:
                 spectra,
                 pred.nn_mean,
                 selected,
+                pred.nn_ci95,
                 robust=args.robust_refiner,
+                guarded=args.guarded_refiner,
+                guarded_prior_lambda=float(args.guarded_prior_lambda),
+                guarded_trust_region=tuple(float(v) for v in args.guarded_trust_region),
                 coarse_grid_on_top=args.coarse_grid_on_top,
                 workers=args.refiner_workers,
                 use_gpu_refiner=args.gpu_refiner,
@@ -482,6 +546,13 @@ def main() -> int:
                 spectra[selected], refined[selected], WAVELENGTHS, batch_size=args.batch_size
             )
             ref_metrics = aggregate_param_metrics(refined[selected], true_params[selected])
+        ref_worse_rate = None
+        ref_improved_spectral_rate = None
+        if len(selected):
+            nn_norm_sel = normalized_abs_error(pred.nn_mean[selected], true_params[selected]).mean(axis=1)
+            ref_norm_sel = normalized_abs_error(refined[selected], true_params[selected]).mean(axis=1)
+            ref_worse_rate = float(np.mean(ref_norm_sel > nn_norm_sel))
+            ref_improved_spectral_rate = float(np.mean(ref_spectral_mae[selected] < nn_spectral_mae[selected]))
 
         failures = make_failure_rows(
             true_params,
@@ -501,16 +572,25 @@ def main() -> int:
 
         result = {
             "noise_std": float(noise_std),
+            "pipeline_label": args.pipeline_label,
             "wall_time_s": float(time.perf_counter() - t_noise),
             "nn_time_s": float(nn_time),
             "nn_metrics": nn_metrics,
             "nn_flag_rates": {k: float(v.mean()) for k, v in nn_flags.items()},
+            "nn_risk_summary": {
+                "mean": float(np.mean(nn_risk)),
+                "p90": float(np.percentile(nn_risk, 90)),
+                "p99": float(np.percentile(nn_risk, 99)),
+                "fraction_over_0p7": float(np.mean(nn_risk > 0.7)),
+            },
             "n_refined": int(len(selected)),
             "refined_metrics_on_selected": ref_metrics,
             "refiner_records_summary": {
                 "success_rate": float(np.mean([r["success"] for r in ref_records])) if ref_records else None,
                 "mean_iterations": float(np.mean([r["n_iterations"] for r in ref_records])) if ref_records else None,
                 "mean_improvement_pct": float(np.mean([r["improvement"] for r in ref_records])) if ref_records else None,
+                "worsened_param_rate": ref_worse_rate,
+                "improved_spectral_rate": ref_improved_spectral_rate,
             },
         }
         summary["noise_results"].append(result)
@@ -521,8 +601,13 @@ def main() -> int:
         print(f"    NN k MAE:         {nn_metrics['k_mae']:.5f}")
         print(f"    NN catastrophic:  {result['nn_flag_rates']['catastrophic'] * 100:.2f}%")
         print(f"    CI miss any:      {result['nn_flag_rates'].get('ci_misses_any', 0.0) * 100:.2f}%")
+        print(f"    Risk > 0.7:       {result['nn_risk_summary']['fraction_over_0p7'] * 100:.2f}%")
         if ref_metrics:
             print(f"    refined subset n MAE: {ref_metrics['n_mae']:.5f}")
+            print(
+                "    refiner worsened params: "
+                f"{result['refiner_records_summary']['worsened_param_rate'] * 100:.2f}%"
+            )
 
         # Save compact arrays per noise level. This is intentionally NPZ, not CSV, for scale.
         npz_path = out_dir / f"{args.output_stem}_noise_{str(noise_std).replace('.', 'p')}.npz"

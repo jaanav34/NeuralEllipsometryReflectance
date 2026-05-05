@@ -89,6 +89,19 @@ Plot one NPZ output:
 python scripts/plot_benchmark_results.py artifacts/benchmarks/grid_768k_nn_atlas/grid_768k_nn_atlas_noise_0p0.npz
 ```
 
+Pipeline matrix benchmark with the same app path components:
+
+```bash
+python scripts/run_reliability_matrix.py --n-random 100000 --noise-levels 0 0.001 0.005 --mc-samples 50 --max-refine 5000 --output-stem reliability_matrix_v1
+```
+
+This runs four modes:
+
+- `nn_only`
+- `denoiser_nn`
+- `nn_guarded_refiner`
+- `denoiser_nn_guarded_refiner`
+
 ## Acceptance criteria
 
 The model does not need to be perfect everywhere. It needs to be honest and stable.
