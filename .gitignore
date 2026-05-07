@@ -4,6 +4,8 @@ dataset_v2.npz
 !spectra_norm_v4.npz
 !spectra_norm.npz
 !spectra_norm_v6_mdn.npz
+!spectra_norm_v5_reliability.npz
+!spectra_norm_v4_1.npz
 __pycache__/
 *.pyc
 .env
