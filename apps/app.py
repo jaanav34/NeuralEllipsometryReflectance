@@ -16,6 +16,8 @@ import matplotlib.pyplot as plt
 from src.paths import artifact_path
 from src.tmm_simulator import simulate_reflectance
 from src.spectranet import SpectraNet
+from src.spectranet_mdn import SpectraNetMDN
+from src.posterior_ranker import rank_mdn_posterior_candidates
 from src.refiner import refine_prediction
 from src.robust_refiner import refine_prediction_guarded_multistart
 from src.denoiser import DenoisingAutoencoder
@@ -49,6 +51,23 @@ def load_model():
                                      weights_only=True))
     model.eval()
     return model
+
+
+@st.cache_resource
+def load_mdn_model():
+    model_path = artifact_path("models", "spectranet_v6_mdn.pt")
+    norm_path = artifact_path("data", "spectra_norm_v6_mdn.npz")
+    if not model_path.exists() or not norm_path.exists():
+        return None
+    mdn_model = SpectraNetMDN(n_components=5)
+    mdn_model.load_state_dict(torch.load(model_path, map_location="cpu", weights_only=True))
+    mdn_model.eval()
+    norm = np.load(norm_path)
+    return {
+        "model": mdn_model,
+        "mean": norm["mean"].astype(np.float32),
+        "std": norm["std"].astype(np.float32),
+    }
 
 
 @st.cache_data
@@ -244,7 +263,12 @@ with tab2:
     st.header("SpectraNet V4: Inverse Predictor")
 
     model = load_model()
+    mdn_bundle = load_mdn_model()
     X_mean, X_std = load_norm_stats()
+    if mdn_bundle is None:
+        st.caption(
+            "MDN posterior model not found yet. Train `scripts/train_v6_mdn.py` to enable posterior spread visualization."
+        )
 
     input_mode = st.radio(
         "Input mode",
@@ -363,6 +387,13 @@ with tab2:
                 key="lambda_prior",
                 disabled=not (use_refiner and use_guarded_refiner),
             )
+            show_posterior = st.checkbox(
+                "Show posterior alternatives",
+                value=mdn_bundle is not None,
+                disabled=mdn_bundle is None,
+                key="show_posterior",
+                help="Uses MDN posterior samples ranked by TMM residual.",
+            )
         with col_dt1:
             viz_layout = st.radio("Comparison view", ["Side-by-side", "Overlay"], horizontal=True, key="viz_layout", help="Side-by-side renders one panel per result. Overlay stacks them.")
             viz_show_waves = st.checkbox("Animate sweep", value=True, key="viz_show_waves")
@@ -438,6 +469,7 @@ with tab2:
             # Optionally run refiner (always against original raw spectrum)
             ref_result = None
             ref_alternatives = []
+            mdn_candidates = []
             if use_refiner:
                 if use_guarded_refiner:
                     guarded_bundle = refine_prediction_guarded_multistart(
@@ -460,6 +492,21 @@ with tab2:
                         float(pred_thick), float(pred_n), float(pred_k),
                         WAVELENGTHS
                     )
+
+            if show_posterior and mdn_bundle is not None:
+                x_mdn = (spectrum_for_model.astype(np.float32) - mdn_bundle["mean"]) / mdn_bundle["std"]
+                x_mdn_t = torch.from_numpy(x_mdn[np.newaxis, :])
+                with torch.no_grad():
+                    mdn_out = mdn_bundle["model"](x_mdn_t)
+                mdn_candidates = rank_mdn_posterior_candidates(
+                    spectrum=input_spectrum,
+                    logits=mdn_out["logits"],
+                    means=mdn_out["means"],
+                    scales=mdn_out["scales"],
+                    wavelengths=WAVELENGTHS,
+                    n_samples=120,
+                    top_k=5,
+                )
 
             # --- Pre-compute metrics for Digital Twin ---
             if ref_result is not None:
@@ -631,6 +678,19 @@ with tab2:
                         f"n={alt['n']:.4f}, k={alt['k']:.4f}, "
                         f"spectral MAE={alt_mae:.6f}"
                     )
+
+            if mdn_candidates:
+                st.markdown("**Posterior spread (MDN + TMM ranking)**")
+                for cand in mdn_candidates:
+                    st.write(
+                        f"{int(cand['rank'])}. d={cand['thickness']:.2f} nm, "
+                        f"n={cand['n']:.4f}, k={cand['k']:.4f}, "
+                        f"spectral MAE={cand['spectral_mae']:.6f}"
+                    )
+                st.caption(
+                    "These are multiple plausible inverse solutions sampled from a learned posterior, "
+                    "then ranked by forward-physics residual."
+                )
 
             # --- Spectral plots ---
             col_p1, col_p2 = st.columns(2)

@@ -7,6 +7,7 @@ on a silicon substrate using the characteristic matrix formulation.
 
 import numpy as np
 import matplotlib.pyplot as plt
+from pathlib import Path
 
 
 def simulate_reflectance(thickness_nm, n, k, wavelengths_nm):
@@ -234,6 +235,173 @@ def simulate_reflectance_torch_fast(thicknesses, n_vals, k_vals, wavelengths):
     r = numerator / denominator
 
     return torch.abs(r) ** 2
+
+
+_SI_TABLE_CACHE = None
+
+
+def load_si_nk_table(table_path=None):
+    """
+    Load wavelength-dependent Si n and k values from TSV file.
+    """
+    global _SI_TABLE_CACHE
+    if _SI_TABLE_CACHE is not None and table_path is None:
+        return _SI_TABLE_CACHE
+
+    if table_path is None:
+        table_path = Path(__file__).resolve().parent / "material_data" / "si_nk_kla_public.tsv"
+
+    data = np.genfromtxt(table_path, delimiter="\t", names=True, dtype=float)
+    wl = np.asarray(data["wavelength_nm"], dtype=float)
+    n_vals = np.asarray(data["n"], dtype=float)
+    k_vals = np.asarray(data["k"], dtype=float)
+
+    order = np.argsort(wl)
+    wl = wl[order]
+    n_vals = n_vals[order]
+    k_vals = k_vals[order]
+
+    if table_path is None or str(table_path).endswith("si_nk_kla_public.tsv"):
+        _SI_TABLE_CACHE = (wl, n_vals, k_vals)
+    return wl, n_vals, k_vals
+
+
+def interpolate_si_nk(wavelengths_nm, table_path=None):
+    """
+    Interpolate Si substrate n and k at requested wavelengths.
+    """
+    wavelengths = np.asarray(wavelengths_nm, dtype=float)
+    wl_table, n_table, k_table = load_si_nk_table(table_path=table_path)
+    n_interp = np.interp(wavelengths, wl_table, n_table)
+    k_interp = np.interp(wavelengths, wl_table, k_table)
+    return n_interp, k_interp
+
+
+def film_dispersion_simple(wavelengths_nm, n0, k0, n_slope=0.0, k_slope=0.0, pivot_nm=600.0):
+    """
+    Simple linear film dispersion model around pivot wavelength.
+    """
+    wavelengths = np.asarray(wavelengths_nm, dtype=float)
+    delta = (wavelengths - float(pivot_nm)) / float(pivot_nm)
+    n_vals = np.asarray(n0, dtype=float) + float(n_slope) * delta
+    k_vals = np.asarray(k0, dtype=float) + float(k_slope) * delta
+    return n_vals, np.clip(k_vals, 0.0, None)
+
+
+def _reflectance_from_stack_normal_incidence(n_layers_complex, d_layers_nm, wavelengths_nm, n_incident=1.0 + 0.0j):
+    """
+    Generic normal-incidence TMM for stack:
+    incident | layer1 ... layerN | substrate
+
+    n_layers_complex is a list where each element is:
+      - layer array shape (W,) for layers and final substrate, or
+      - scalar complex value.
+    d_layers_nm contains thicknesses only for physical layers (not substrate).
+    """
+    wavelengths = np.asarray(wavelengths_nm, dtype=float)
+    num_w = len(wavelengths)
+    d_layers = np.asarray(d_layers_nm, dtype=float)
+    reflectance = np.empty(num_w, dtype=float)
+
+    layer_arrays = []
+    for entry in n_layers_complex:
+        arr = np.asarray(entry)
+        if arr.ndim == 0:
+            arr = np.full(num_w, complex(arr), dtype=np.complex128)
+        else:
+            arr = arr.astype(np.complex128)
+            if len(arr) != num_w:
+                raise ValueError("Layer array length must match wavelengths.")
+        layer_arrays.append(arr)
+
+    if len(layer_arrays) != len(d_layers) + 1:
+        raise ValueError("Expected one substrate entry in n_layers_complex beyond physical layers.")
+
+    n0 = complex(n_incident)
+    for wi, wl in enumerate(wavelengths):
+        m11 = 1.0 + 0.0j
+        m12 = 0.0 + 0.0j
+        m21 = 0.0 + 0.0j
+        m22 = 1.0 + 0.0j
+
+        for li, d_nm in enumerate(d_layers):
+            n_layer = layer_arrays[li][wi]
+            delta = (2.0 * np.pi / wl) * n_layer * d_nm
+            cos_d = np.cos(delta)
+            sin_d = np.sin(delta)
+            a11 = cos_d
+            a12 = -1j * sin_d / n_layer
+            a21 = -1j * n_layer * sin_d
+            a22 = cos_d
+
+            b11 = m11 * a11 + m12 * a21
+            b12 = m11 * a12 + m12 * a22
+            b21 = m21 * a11 + m22 * a21
+            b22 = m21 * a12 + m22 * a22
+            m11, m12, m21, m22 = b11, b12, b21, b22
+
+        n_sub = layer_arrays[-1][wi]
+        numerator = (m11 + m12 * n_sub) * n0 - (m21 + m22 * n_sub)
+        denominator = (m11 + m12 * n_sub) * n0 + (m21 + m22 * n_sub)
+        r = numerator / denominator
+        reflectance[wi] = np.abs(r) ** 2
+    return reflectance
+
+
+def simulate_reflectance_realistic(
+    thickness_nm,
+    n,
+    k,
+    wavelengths_nm,
+    native_oxide_nm=0.0,
+    oxide_n=1.46,
+    oxide_k=0.0,
+    use_dispersive_si=True,
+    si_table_path=None,
+    film_n_slope=0.0,
+    film_k_slope=0.0,
+):
+    """
+    Realistic forward model:
+      air | optional native SiO2 | target film | Si substrate with n(λ),k(λ)
+
+    Legacy compatibility:
+      If use_dispersive_si=False and native_oxide_nm=0 with zero slopes,
+      this reduces to the same assumptions as simulate_reflectance().
+    """
+    wavelengths = np.asarray(wavelengths_nm, dtype=float)
+    if use_dispersive_si:
+        n_si, k_si = interpolate_si_nk(wavelengths, table_path=si_table_path)
+        n_sub = n_si + 1j * k_si
+    else:
+        n_sub = np.full(len(wavelengths), 3.88 + 1j * 0.02, dtype=np.complex128)
+
+    n_film_vals, k_film_vals = film_dispersion_simple(
+        wavelengths,
+        n0=float(n),
+        k0=float(k),
+        n_slope=float(film_n_slope),
+        k_slope=float(film_k_slope),
+    )
+    n_film = n_film_vals + 1j * k_film_vals
+
+    layers_n = []
+    layers_d = []
+    if float(native_oxide_nm) > 0.0:
+        oxide_arr = np.full(len(wavelengths), complex(float(oxide_n), float(oxide_k)), dtype=np.complex128)
+        layers_n.append(oxide_arr)
+        layers_d.append(float(native_oxide_nm))
+
+    layers_n.append(n_film.astype(np.complex128))
+    layers_d.append(float(thickness_nm))
+    layers_n.append(n_sub.astype(np.complex128))
+
+    return _reflectance_from_stack_normal_incidence(
+        layers_n,
+        layers_d,
+        wavelengths,
+        n_incident=1.0 + 0.0j,
+    )
 
 
 if __name__ == "__main__":
