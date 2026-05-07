@@ -3,9 +3,11 @@ dataset_v2.npz
 *.npz
 !spectra_norm_v4.npz
 !spectra_norm.npz
+!spectra_norm_v6_mdn.npz
 __pycache__/
 *.pyc
 .env
 dump.py
 repo_dump.txt
 artifacts/tmp/
+*.csv
