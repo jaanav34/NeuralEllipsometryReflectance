@@ -40,6 +40,85 @@ from src.spectranet_reliability import SpectraNetReliability
 from src.tmm_simulator import simulate_reflectance_batch
 
 
+def _binary_auroc(y_true: np.ndarray, score: np.ndarray) -> float:
+    y = y_true.astype(bool)
+    s = score.astype(np.float64)
+    n_pos = int(np.sum(y))
+    n_neg = int(len(y) - n_pos)
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+    order = np.argsort(s)
+    ranks = np.empty_like(order, dtype=np.float64)
+    ranks[order] = np.arange(1, len(s) + 1, dtype=np.float64)
+    sum_ranks_pos = float(np.sum(ranks[y]))
+    u = sum_ranks_pos - (n_pos * (n_pos + 1) / 2.0)
+    return float(u / (n_pos * n_neg))
+
+
+def _binary_auprc(y_true: np.ndarray, score: np.ndarray) -> float:
+    y = y_true.astype(bool)
+    s = score.astype(np.float64)
+    n_pos = int(np.sum(y))
+    if n_pos == 0:
+        return float("nan")
+    order = np.argsort(-s)
+    y_sorted = y[order].astype(np.float64)
+    tp = np.cumsum(y_sorted)
+    fp = np.cumsum(1.0 - y_sorted)
+    precision = tp / np.maximum(tp + fp, 1.0)
+    recall = tp / n_pos
+    recall = np.concatenate([[0.0], recall])
+    precision = np.concatenate([[1.0], precision])
+    return float(np.sum((recall[1:] - recall[:-1]) * precision[1:]))
+
+
+def _selective_rejection_stats(catastrophic: np.ndarray, risk_prob: np.ndarray) -> dict[str, float]:
+    out: dict[str, float] = {}
+    base = float(np.mean(catastrophic))
+    out["base_catastrophic_rate"] = base
+    for frac in (0.10, 0.20, 0.30):
+        cutoff = float(np.quantile(risk_prob, 1.0 - frac))
+        keep = risk_prob < cutoff
+        kept_rate = float(np.mean(catastrophic[keep])) if np.any(keep) else float("nan")
+        out[f"reject_top_{int(frac * 100)}pct_kept_catastrophic_rate"] = kept_rate
+        if np.isfinite(kept_rate) and base > 0:
+            out[f"reject_top_{int(frac * 100)}pct_relative_drop"] = float((base - kept_rate) / base)
+        else:
+            out[f"reject_top_{int(frac * 100)}pct_relative_drop"] = float("nan")
+    return out
+
+
+def _risk_bucket_calibration(catastrophic: np.ndarray, risk_prob: np.ndarray) -> list[dict[str, float]]:
+    bins = np.linspace(0.0, 1.0, 11)
+    rows: list[dict[str, float]] = []
+    for lo, hi in zip(bins[:-1], bins[1:]):
+        if hi < 1.0:
+            mask = (risk_prob >= lo) & (risk_prob < hi)
+        else:
+            mask = (risk_prob >= lo) & (risk_prob <= hi)
+        if not np.any(mask):
+            rows.append(
+                {
+                    "risk_lo": float(lo),
+                    "risk_hi": float(hi),
+                    "count": 0.0,
+                    "mean_risk": float("nan"),
+                    "catastrophic_rate": float("nan"),
+                }
+            )
+            continue
+        rows.append(
+            {
+                "risk_lo": float(lo),
+                "risk_hi": float(hi),
+                "count": float(np.sum(mask)),
+                "mean_risk": float(np.mean(risk_prob[mask])),
+                "catastrophic_rate": float(np.mean(catastrophic[mask])),
+            }
+        )
+    return rows
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train reliability-first SpectraNet V5.")
     parser.add_argument("--epochs", type=int, default=220)
@@ -137,6 +216,11 @@ def main() -> int:
     x_mean = x_train_raw.mean(axis=0)
     x_std = x_train_raw.std(axis=0)
     x_std[x_std < 1e-8] = 1.0
+    np.savez(
+        ensure_parent_dir(artifact_path("data", "spectra_norm_v5_reliability.npz")),
+        mean=x_mean,
+        std=x_std,
+    )
 
     y_train_norm = _normalize_params(y_train_phys)
     y_val_norm = _normalize_params(y_val_phys)
@@ -270,6 +354,13 @@ def main() -> int:
     )
     calibration_path = save_calibration(ci_scales, name="risk_ci_calibration_v5.npz")
 
+    test_risk = np.asarray(test_eval["risk_prob"], dtype=np.float64)
+    test_catastrophic = catastrophic_flags_from_error(np.asarray(test_eval["abs_err"], dtype=np.float64))
+    auroc = _binary_auroc(test_catastrophic, test_risk)
+    auprc = _binary_auprc(test_catastrophic, test_risk)
+    selective = _selective_rejection_stats(test_catastrophic, test_risk)
+    risk_buckets = _risk_bucket_calibration(test_catastrophic, test_risk)
+
     summary = {
         "epochs": args.epochs,
         "best_epoch": best_epoch,
@@ -282,6 +373,12 @@ def main() -> int:
         "test_mae_k": float(np.mean(test_eval["abs_err"][:, 2])),  # type: ignore[index]
         "test_catastrophic_rate": float(test_eval["catastrophic_rate"]),  # type: ignore[arg-type]
         "val_catastrophic_rate": float(val_eval["catastrophic_rate"]),  # type: ignore[arg-type]
+        "test_catastrophic_base_rate": float(np.mean(test_catastrophic)),
+        "risk_auroc": float(auroc),
+        "risk_auprc": float(auprc),
+        "risk_base_positive_rate": float(np.mean(test_catastrophic)),
+        "selective_rejection": selective,
+        "risk_bucket_calibration": risk_buckets,
         "ci_calibration_scales": [float(x) for x in ci_scales],
         "ci_calibration_path": str(calibration_path),
         "history_tail": history[-10:],

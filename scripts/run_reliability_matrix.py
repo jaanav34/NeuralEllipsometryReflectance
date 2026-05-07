@@ -27,6 +27,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--refiner-workers", type=int, default=0)
     parser.add_argument("--gpu-refiner", action="store_true")
     parser.add_argument("--device", default="auto")
+    parser.add_argument(
+        "--model-kind",
+        choices=["v4", "v4_1", "v4_2", "v5_reliability", "v6_mdn"],
+        default="v4",
+    )
+    parser.add_argument("--model-path", default=None)
+    parser.add_argument("--norm-path", default=None)
+    parser.add_argument("--denoiser-path", default="denoiser_joint.pt")
     parser.add_argument("--output-stem", default="reliability_matrix")
     parser.add_argument("--seed", type=int, default=123)
     return parser.parse_args()
@@ -57,7 +65,15 @@ def run_mode(mode: str, args: argparse.Namespace) -> Path:
         mode,
         "--device",
         args.device,
+        "--model-kind",
+        args.model_kind,
+        "--denoiser-path",
+        args.denoiser_path,
     ]
+    if args.model_path:
+        cmd.extend(["--model-path", args.model_path])
+    if args.norm_path:
+        cmd.extend(["--norm-path", args.norm_path])
 
     if mode == "nn_only":
         cmd.extend(["--no-denoiser", "--refine-strategy", "none"])

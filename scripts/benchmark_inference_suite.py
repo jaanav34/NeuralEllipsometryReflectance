@@ -19,6 +19,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from src.inference_pipeline import (
+    BatchPrediction,
     PARAM_NAMES,
     WAVELENGTHS,
     PipelineConfig,
@@ -34,6 +35,7 @@ from src.inference_pipeline import (
     simulate_params,
     spectral_mae_for_params,
 )
+from src.denoiser import DenoisingAutoencoder
 from src.paths import artifact_path, ensure_parent_dir
 from src.robust_refiner import (
     refine_prediction_guarded_multistart,
@@ -41,6 +43,8 @@ from src.robust_refiner import (
     refine_prediction_diagnostic,
     refine_prediction_multistart,
 )
+from src.spectranet_mdn import SpectraNetMDN
+from src.spectranet_reliability import SpectraNetReliability
 from src.tmm_simulator import simulate_reflectance
 
 
@@ -77,6 +81,9 @@ FAILURE_FIELDNAMES = [
     "failure_reason",
 ]
 
+PARAM_MIN = np.array([10.0, 1.3, 0.0], dtype=np.float32)
+PARAM_RANGE = np.array([290.0, 1.2, 0.5], dtype=np.float32)
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -92,6 +99,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=8192)
     p.add_argument("--mc-samples", type=int, default=100)
     p.add_argument("--device", default="auto")
+    p.add_argument(
+        "--model-kind",
+        choices=["v4", "v4_1", "v4_2", "v5_reliability", "v6_mdn"],
+        default="v4",
+        help="Model family/checkpoint preset used for NN inference.",
+    )
+    p.add_argument("--model-path", default=None, help="Optional model filename in artifacts/models.")
+    p.add_argument("--norm-path", default=None, help="Optional norm filename in artifacts/data.")
+    p.add_argument("--denoiser-path", default="denoiser_joint.pt", help="Denoiser filename in artifacts/models.")
     p.add_argument("--no-denoiser", action="store_true")
     p.add_argument(
         "--refine-strategy",
@@ -122,6 +138,110 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--top-k-failures", type=int, default=250)
     p.add_argument("--include-probes", action="store_true", help="Include hard-coded examples from manual app testing.")
     return p.parse_args()
+
+
+def _resolve_v4_artifact_names(model_kind: str, model_path: str | None, norm_path: str | None) -> tuple[str, str]:
+    default_model = {
+        "v4": "spectranet_v4.pt",
+        "v4_1": "spectranet_v4_1.pt",
+        "v4_2": "spectranet_v4_2.pt",
+    }[model_kind]
+    default_norm = {
+        "v4": "spectra_norm_v4.npz",
+        "v4_1": "spectra_norm_v4_1.npz",
+        "v4_2": "spectra_norm_v4_1.npz",
+    }[model_kind]
+    return (model_path or default_model, norm_path or default_norm)
+
+
+def _load_optional_denoiser(device: torch.device, denoiser_name: str) -> DenoisingAutoencoder:
+    denoiser = DenoisingAutoencoder().to(device)
+    denoiser.load_state_dict(
+        torch.load(artifact_path("models", denoiser_name), map_location=device, weights_only=True)
+    )
+    denoiser.eval()
+    return denoiser
+
+
+def _run_non_v4_predictor(
+    spectra: np.ndarray,
+    *,
+    model_kind: str,
+    model_path: str | None,
+    norm_path: str | None,
+    denoiser_path: str,
+    use_denoiser: bool,
+    batch_size: int,
+    device: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if device == "auto":
+        dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        dev = torch.device(device)
+
+    resolved_norm = norm_path or (
+        "spectra_norm_v5_reliability.npz" if model_kind == "v5_reliability" else "spectra_norm_v6_mdn.npz"
+    )
+    norm = np.load(artifact_path("data", resolved_norm))
+    x_mean = norm["mean"].astype(np.float32)
+    x_std = norm["std"].astype(np.float32)
+    x_std[x_std < 1e-8] = 1.0
+
+    spectrum_for_model = spectra.astype(np.float32, copy=False)
+    if use_denoiser:
+        denoiser = _load_optional_denoiser(dev, denoiser_path)
+        denoised = np.empty_like(spectrum_for_model, dtype=np.float32)
+        with torch.no_grad():
+            for sl in iter_slices(len(spectrum_for_model), batch_size):
+                xb = torch.from_numpy(spectrum_for_model[sl]).to(dev)
+                denoised[sl] = denoiser(xb).detach().cpu().numpy().astype(np.float32)
+        spectrum_for_model = denoised
+
+    x_norm = (spectrum_for_model - x_mean[None, :]) / x_std[None, :]
+
+    if model_kind == "v5_reliability":
+        model_name = model_path or "spectranet_v5_reliability.pt"
+        model = SpectraNetReliability().to(dev)
+        model.load_state_dict(torch.load(artifact_path("models", model_name), map_location=dev, weights_only=True))
+        model.eval()
+
+        pred_mean = np.empty((len(x_norm), 3), dtype=np.float32)
+        pred_std = np.empty((len(x_norm), 3), dtype=np.float32)
+        with torch.no_grad():
+            for sl in iter_slices(len(x_norm), batch_size):
+                xb = torch.from_numpy(x_norm[sl].astype(np.float32, copy=False)).to(dev)
+                out = model(xb)
+                pred_mean[sl] = out["param_mean"].detach().cpu().numpy().astype(np.float32)
+                pred_std[sl] = out["param_std"].detach().cpu().numpy().astype(np.float32)
+        mean_phys = pred_mean * PARAM_RANGE + PARAM_MIN
+        std_phys = pred_std * PARAM_RANGE
+        ci95 = 1.96 * std_phys
+        return mean_phys.astype(np.float32), std_phys.astype(np.float32), ci95.astype(np.float32), spectrum_for_model
+
+    model_name = model_path or "spectranet_v6_mdn.pt"
+    model = SpectraNetMDN().to(dev)
+    model.load_state_dict(torch.load(artifact_path("models", model_name), map_location=dev, weights_only=True))
+    model.eval()
+
+    pred_mean = np.empty((len(x_norm), 3), dtype=np.float32)
+    pred_std = np.empty((len(x_norm), 3), dtype=np.float32)
+    with torch.no_grad():
+        for sl in iter_slices(len(x_norm), batch_size):
+            xb = torch.from_numpy(x_norm[sl].astype(np.float32, copy=False)).to(dev)
+            out = model(xb)
+            weights = torch.softmax(out["logits"], dim=1)
+            means = out["means"]
+            scales = out["scales"]
+            mean = torch.sum(weights.unsqueeze(-1) * means, dim=1)
+            second = torch.sum(weights.unsqueeze(-1) * ((scales * scales) + (means * means)), dim=1)
+            var = torch.clamp(second - (mean * mean), min=1e-12)
+            std = torch.sqrt(var)
+            pred_mean[sl] = mean.detach().cpu().numpy().astype(np.float32)
+            pred_std[sl] = std.detach().cpu().numpy().astype(np.float32)
+    mean_phys = pred_mean * PARAM_RANGE + PARAM_MIN
+    std_phys = pred_std * PARAM_RANGE
+    ci95 = 1.96 * std_phys
+    return mean_phys.astype(np.float32), std_phys.astype(np.float32), ci95.astype(np.float32), spectrum_for_model
 
 
 def make_random_params(n: int, rng: np.random.Generator) -> np.ndarray:
@@ -461,6 +581,7 @@ def main() -> int:
     print(f"samples: {len(true_params):,}")
     print(f"noise levels: {args.noise_levels}")
     print(f"mc samples: {args.mc_samples}")
+    print(f"model kind: {args.model_kind}")
     print(f"denoiser: {not args.no_denoiser}")
     print(f"refine strategy: {args.refine_strategy}, max_refine={args.max_refine}, robust={args.robust_refiner}")
     print(f"guarded refiner: {args.guarded_refiner} (lambda={args.guarded_prior_lambda})")
@@ -473,13 +594,24 @@ def main() -> int:
         )
     print("=" * 100, flush=True)
 
-    bundle = load_bundle(device=args.device, load_denoiser=not args.no_denoiser)
-    config = PipelineConfig(
-        use_denoiser=not args.no_denoiser,
-        mc_samples=args.mc_samples,
-        batch_size=args.batch_size,
-        device=args.device,
-    )
+    use_v4_path = args.model_kind in {"v4", "v4_1", "v4_2"}
+    bundle = None
+    config = None
+    if use_v4_path:
+        model_name, norm_name = _resolve_v4_artifact_names(args.model_kind, args.model_path, args.norm_path)
+        bundle = load_bundle(
+            model_name=model_name,
+            norm_name=norm_name,
+            denoiser_name=args.denoiser_path,
+            device=args.device,
+            load_denoiser=not args.no_denoiser,
+        )
+        config = PipelineConfig(
+            use_denoiser=not args.no_denoiser,
+            mc_samples=args.mc_samples,
+            batch_size=args.batch_size,
+            device=args.device,
+        )
 
     clean_spectra = simulate_params(true_params, WAVELENGTHS)
 
@@ -499,7 +631,27 @@ def main() -> int:
 
         print("  running denoiser + MC Dropout NN...", flush=True)
         t0 = time.perf_counter()
-        pred = predict_app_style_batch(spectra, bundle, config)
+        if use_v4_path:
+            if bundle is None or config is None:
+                raise RuntimeError("V4 bundle/config not initialized.")
+            pred = predict_app_style_batch(spectra, bundle, config)
+        else:
+            nn_mean, nn_std, nn_ci95, spectrum_for_model = _run_non_v4_predictor(
+                spectra,
+                model_kind=args.model_kind,
+                model_path=args.model_path,
+                norm_path=args.norm_path,
+                denoiser_path=args.denoiser_path,
+                use_denoiser=not args.no_denoiser,
+                batch_size=args.batch_size,
+                device=args.device,
+            )
+            pred = BatchPrediction(
+                nn_mean=nn_mean,
+                nn_std=nn_std,
+                nn_ci95=nn_ci95,
+                spectrum_for_model=spectrum_for_model,
+            )
         nn_time = time.perf_counter() - t0
         print(f"  NN path done in {nn_time:.1f}s", flush=True)
 
