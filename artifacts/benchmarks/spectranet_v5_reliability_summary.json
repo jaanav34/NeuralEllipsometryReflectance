@@ -1,0 +1,156 @@
+{
+  "epochs": 220,
+  "best_epoch": 214,
+  "best_val_loss": 0.007220969868302346,
+  "train_minutes": 25.18861989180247,
+  "use_curriculum": true,
+  "curriculum_size": 500000,
+  "test_mae_thickness_nm": 4.351239204406738,
+  "test_mae_n": 0.09314163774251938,
+  "test_mae_k": 0.009935904294252396,
+  "test_catastrophic_rate": 0.11746,
+  "val_catastrophic_rate": 0.11444,
+  "test_catastrophic_base_rate": 0.11746,
+  "risk_auroc": 0.9557371730376655,
+  "risk_auprc": 0.8112186347258153,
+  "risk_base_positive_rate": 0.11746,
+  "selective_rejection": {
+    "base_catastrophic_rate": 0.11746,
+    "reject_top_10pct_kept_catastrophic_rate": 0.0436,
+    "reject_top_10pct_relative_drop": 0.6288098075940746,
+    "reject_top_20pct_kept_catastrophic_rate": 0.02095,
+    "reject_top_20pct_relative_drop": 0.8216414098416482,
+    "reject_top_30pct_kept_catastrophic_rate": 0.007574025380130331,
+    "reject_top_30pct_relative_drop": 0.9355182582995886
+  },
+  "risk_bucket_calibration": [
+    {
+      "risk_lo": 0.0,
+      "risk_hi": 0.1,
+      "count": 19221.0,
+      "mean_risk": 0.03850743696767083,
+      "catastrophic_rate": 0.0010405285885229697
+    },
+    {
+      "risk_lo": 0.1,
+      "risk_hi": 0.2,
+      "count": 11281.0,
+      "mean_risk": 0.14707552722733913,
+      "catastrophic_rate": 0.006825636025175073
+    },
+    {
+      "risk_lo": 0.2,
+      "risk_hi": 0.30000000000000004,
+      "count": 5027.0,
+      "mean_risk": 0.24494040673974732,
+      "catastrophic_rate": 0.0395862343345932
+    },
+    {
+      "risk_lo": 0.30000000000000004,
+      "risk_hi": 0.4,
+      "count": 3541.0,
+      "mean_risk": 0.3497208599416727,
+      "catastrophic_rate": 0.09714769839028523
+    },
+    {
+      "risk_lo": 0.4,
+      "risk_hi": 0.5,
+      "count": 3638.0,
+      "mean_risk": 0.4482135335664424,
+      "catastrophic_rate": 0.20890599230346343
+    },
+    {
+      "risk_lo": 0.5,
+      "risk_hi": 0.6000000000000001,
+      "count": 2371.0,
+      "mean_risk": 0.5437760334988276,
+      "catastrophic_rate": 0.2526360185575706
+    },
+    {
+      "risk_lo": 0.6000000000000001,
+      "risk_hi": 0.7000000000000001,
+      "count": 1906.0,
+      "mean_risk": 0.6524149843365549,
+      "catastrophic_rate": 0.5535152151101784
+    },
+    {
+      "risk_lo": 0.7000000000000001,
+      "risk_hi": 0.8,
+      "count": 1558.0,
+      "mean_risk": 0.7446919472287953,
+      "catastrophic_rate": 0.8844672657252889
+    },
+    {
+      "risk_lo": 0.8,
+      "risk_hi": 0.9,
+      "count": 1393.0,
+      "mean_risk": 0.8486278066511901,
+      "catastrophic_rate": 0.9885139985642498
+    },
+    {
+      "risk_lo": 0.9,
+      "risk_hi": 1.0,
+      "count": 64.0,
+      "mean_risk": 0.903552214615047,
+      "catastrophic_rate": 1.0
+    }
+  ],
+  "ci_calibration_scales": [
+    1.0562403202056885,
+    1.195592999458313,
+    0.8576800227165222
+  ],
+  "ci_calibration_path": "C:\\Users\\fireb\\Downloads\\Projects\\NeuralEllipsometryReflectance\\artifacts\\data\\risk_ci_calibration_v5.npz",
+  "history_tail": [
+    {
+      "epoch": 211,
+      "train_loss": -2.086039958190918,
+      "val_loss": 0.007726961446851492
+    },
+    {
+      "epoch": 212,
+      "train_loss": -2.0895769548797607,
+      "val_loss": 0.007448986005038023
+    },
+    {
+      "epoch": 213,
+      "train_loss": -2.0877638893890382,
+      "val_loss": 0.007465797032862901
+    },
+    {
+      "epoch": 214,
+      "train_loss": -2.086860170593262,
+      "val_loss": 0.007220969868302346
+    },
+    {
+      "epoch": 215,
+      "train_loss": -2.087934069366455,
+      "val_loss": 0.007475990621298552
+    },
+    {
+      "epoch": 216,
+      "train_loss": -2.0918670732116698,
+      "val_loss": 0.007448598574995994
+    },
+    {
+      "epoch": 217,
+      "train_loss": -2.0915822200775147,
+      "val_loss": 0.007879965579807758
+    },
+    {
+      "epoch": 218,
+      "train_loss": -2.0809214192581176,
+      "val_loss": 0.0072587081378698345
+    },
+    {
+      "epoch": 219,
+      "train_loss": -2.0905462561035155,
+      "val_loss": 0.00748759590908885
+    },
+    {
+      "epoch": 220,
+      "train_loss": -2.092749238052368,
+      "val_loss": 0.0074016957753896715
+    }
+  ]
+}

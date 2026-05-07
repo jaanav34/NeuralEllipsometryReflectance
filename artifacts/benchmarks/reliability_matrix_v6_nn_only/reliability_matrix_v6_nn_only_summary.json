@@ -1,0 +1,213 @@
+{
+  "args": {
+    "n_random": 100000,
+    "grid": false,
+    "grid_thickness": 120,
+    "grid_n": 80,
+    "grid_k": 80,
+    "seed": 123,
+    "noise_levels": [
+      0.0,
+      0.001,
+      0.005
+    ],
+    "batch_size": 8192,
+    "mc_samples": 50,
+    "device": "auto",
+    "model_kind": "v6_mdn",
+    "model_path": null,
+    "norm_path": null,
+    "denoiser_path": "denoiser_joint.pt",
+    "no_denoiser": true,
+    "refine_strategy": "none",
+    "max_refine": 5000,
+    "refiner_workers": 0,
+    "robust_refiner": false,
+    "coarse_grid_on_top": 25,
+    "gpu_refiner": false,
+    "gpu_refiner_steps": 120,
+    "gpu_refiner_lr": 0.05,
+    "gpu_refiner_chunk_size": 2048,
+    "guarded_refiner": false,
+    "guarded_prior_lambda": 0.1,
+    "guarded_trust_region": [
+      40.0,
+      0.25,
+      0.1
+    ],
+    "pipeline_label": "nn_only",
+    "output_stem": "reliability_matrix_v6_nn_only",
+    "top_k_failures": 250,
+    "include_probes": false
+  },
+  "n_samples": 100000,
+  "started_at_unix": 1778126776.3355722,
+  "noise_results": [
+    {
+      "noise_std": 0.0,
+      "pipeline_label": "nn_only",
+      "wall_time_s": 7.1062100999988616,
+      "nn_time_s": 1.797806100001253,
+      "nn_metrics": {
+        "thickness_nm_mae": 4.940956115722656,
+        "thickness_nm_p50_abs": 2.9750633239746094,
+        "thickness_nm_p90_abs": 10.561590194702148,
+        "thickness_nm_p99_abs": 32.42268371582031,
+        "thickness_nm_r2": 0.9899465036580309,
+        "n_mae": 0.08082088083028793,
+        "n_p50_abs": 0.0165291428565979,
+        "n_p90_abs": 0.2614465057849884,
+        "n_p99_abs": 0.598008930683136,
+        "n_r2": 0.7997940157570013,
+        "k_mae": 0.016282862052321434,
+        "k_p50_abs": 0.011380299925804138,
+        "k_p90_abs": 0.03202059119939804,
+        "k_p99_abs": 0.10282687097787857,
+        "k_r2": 0.9665588671992235,
+        "normalized_mae": 0.038984742015600204,
+        "overall_r2": 0.9187664622047519
+      },
+      "nn_flag_rates": {
+        "bad_thickness": 0.11436,
+        "bad_n": 0.24687,
+        "bad_k": 0.03791,
+        "catastrophic": 0.10978,
+        "high_norm_error": 0.10191,
+        "thin_film": 0.1374,
+        "very_thin_film": 0.08596,
+        "low_fringe": 0.34027,
+        "ci_misses_thickness": 0.006,
+        "ci_misses_n": 0.00777,
+        "ci_misses_k": 0.02413,
+        "ci_misses_any": 0.03013,
+        "good_spectrum_bad_params": 0.00973
+      },
+      "nn_risk_summary": {
+        "mean": 0.5183261036872864,
+        "p90": 0.8163752555847168,
+        "p99": 0.9372679591178894,
+        "fraction_over_0p7": 0.29698
+      },
+      "n_refined": 0,
+      "refined_metrics_on_selected": {},
+      "refiner_records_summary": {
+        "success_rate": null,
+        "mean_iterations": null,
+        "mean_improvement_pct": null,
+        "worsened_param_rate": null,
+        "improved_spectral_rate": null
+      }
+    },
+    {
+      "noise_std": 0.001,
+      "pipeline_label": "nn_only",
+      "wall_time_s": 6.025630599999204,
+      "nn_time_s": 0.12653750000026776,
+      "nn_metrics": {
+        "thickness_nm_mae": 4.977447509765625,
+        "thickness_nm_p50_abs": 3.00225830078125,
+        "thickness_nm_p90_abs": 10.649924278259277,
+        "thickness_nm_p99_abs": 32.6574592590332,
+        "thickness_nm_r2": 0.9898545885910186,
+        "n_mae": 0.08149783313274384,
+        "n_p50_abs": 0.017110705375671387,
+        "n_p90_abs": 0.2639095187187195,
+        "n_p99_abs": 0.5992213487625122,
+        "n_r2": 0.7982349554812842,
+        "k_mae": 0.01672954298555851,
+        "k_p50_abs": 0.011688929051160812,
+        "k_p90_abs": 0.03365376964211464,
+        "k_p99_abs": 0.1042412519454956,
+        "k_r2": 0.9650489248433749,
+        "normalized_mae": 0.0395125150680542,
+        "overall_r2": 0.9177128229718926
+      },
+      "nn_flag_rates": {
+        "bad_thickness": 0.11624,
+        "bad_n": 0.24889,
+        "bad_k": 0.04251,
+        "catastrophic": 0.11126,
+        "high_norm_error": 0.10373,
+        "thin_film": 0.1374,
+        "very_thin_film": 0.08596,
+        "low_fringe": 0.34027,
+        "ci_misses_thickness": 0.00609,
+        "ci_misses_n": 0.00786,
+        "ci_misses_k": 0.02531,
+        "ci_misses_any": 0.03131,
+        "good_spectrum_bad_params": 0.00968
+      },
+      "nn_risk_summary": {
+        "mean": 0.5185725092887878,
+        "p90": 0.8167175650596619,
+        "p99": 0.9375,
+        "fraction_over_0p7": 0.29815
+      },
+      "n_refined": 0,
+      "refined_metrics_on_selected": {},
+      "refiner_records_summary": {
+        "success_rate": null,
+        "mean_iterations": null,
+        "mean_improvement_pct": null,
+        "worsened_param_rate": null,
+        "improved_spectral_rate": null
+      }
+    },
+    {
+      "noise_std": 0.005,
+      "pipeline_label": "nn_only",
+      "wall_time_s": 6.35385899999892,
+      "nn_time_s": 0.25780500000109896,
+      "nn_metrics": {
+        "thickness_nm_mae": 5.731387615203857,
+        "thickness_nm_p50_abs": 3.59490966796875,
+        "thickness_nm_p90_abs": 12.126974105834961,
+        "thickness_nm_p99_abs": 38.293601989746094,
+        "thickness_nm_r2": 0.9870693354987334,
+        "n_mae": 0.09312312304973602,
+        "n_p50_abs": 0.02510225772857666,
+        "n_p90_abs": 0.29347312450408936,
+        "n_p99_abs": 0.6372047066688538,
+        "n_r2": 0.7585049766981088,
+        "k_mae": 0.02408475987613201,
+        "k_p50_abs": 0.014242127537727356,
+        "k_p90_abs": 0.05649752914905548,
+        "k_p99_abs": 0.15716081857681274,
+        "k_r2": 0.9239108631733943,
+        "normalized_mae": 0.048511844128370285,
+        "overall_r2": 0.8898283917900788
+      },
+      "nn_flag_rates": {
+        "bad_thickness": 0.14403,
+        "bad_n": 0.27676,
+        "bad_k": 0.11999,
+        "catastrophic": 0.13859,
+        "high_norm_error": 0.14161,
+        "thin_film": 0.1374,
+        "very_thin_film": 0.08596,
+        "low_fringe": 0.34027,
+        "ci_misses_thickness": 0.0124,
+        "ci_misses_n": 0.02291,
+        "ci_misses_k": 0.06936,
+        "ci_misses_any": 0.08284,
+        "good_spectrum_bad_params": 0.0
+      },
+      "nn_risk_summary": {
+        "mean": 0.5207096934318542,
+        "p90": 0.8202580213546753,
+        "p99": 0.9375,
+        "fraction_over_0p7": 0.30193
+      },
+      "n_refined": 0,
+      "refined_metrics_on_selected": {},
+      "refiner_records_summary": {
+        "success_rate": null,
+        "mean_iterations": null,
+        "mean_improvement_pct": null,
+        "worsened_param_rate": null,
+        "improved_spectral_rate": null
+      }
+    }
+  ],
+  "finished_at_unix": 1778126796.6544483
+}

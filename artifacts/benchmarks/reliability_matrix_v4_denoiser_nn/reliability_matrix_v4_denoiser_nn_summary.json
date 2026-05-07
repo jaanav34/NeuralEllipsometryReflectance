@@ -1,0 +1,213 @@
+{
+  "args": {
+    "n_random": 100000,
+    "grid": false,
+    "grid_thickness": 120,
+    "grid_n": 80,
+    "grid_k": 80,
+    "seed": 123,
+    "noise_levels": [
+      0.0,
+      0.001,
+      0.005
+    ],
+    "batch_size": 8192,
+    "mc_samples": 50,
+    "device": "auto",
+    "model_kind": "v4",
+    "model_path": null,
+    "norm_path": null,
+    "denoiser_path": "denoiser_joint.pt",
+    "no_denoiser": false,
+    "refine_strategy": "none",
+    "max_refine": 5000,
+    "refiner_workers": 0,
+    "robust_refiner": false,
+    "coarse_grid_on_top": 25,
+    "gpu_refiner": false,
+    "gpu_refiner_steps": 120,
+    "gpu_refiner_lr": 0.05,
+    "gpu_refiner_chunk_size": 2048,
+    "guarded_refiner": false,
+    "guarded_prior_lambda": 0.1,
+    "guarded_trust_region": [
+      40.0,
+      0.25,
+      0.1
+    ],
+    "pipeline_label": "denoiser_nn",
+    "output_stem": "reliability_matrix_v4_denoiser_nn",
+    "top_k_failures": 250,
+    "include_probes": false
+  },
+  "n_samples": 100000,
+  "started_at_unix": 1778126451.7306812,
+  "noise_results": [
+    {
+      "noise_std": 0.0,
+      "pipeline_label": "denoiser_nn",
+      "wall_time_s": 11.64019240000016,
+      "nn_time_s": 6.2328780999996525,
+      "nn_metrics": {
+        "thickness_nm_mae": 6.587218761444092,
+        "thickness_nm_p50_abs": 4.172401428222656,
+        "thickness_nm_p90_abs": 14.129916191101074,
+        "thickness_nm_p99_abs": 42.40308380126953,
+        "thickness_nm_r2": 0.9830604603021087,
+        "n_mae": 0.09972088038921356,
+        "n_p50_abs": 0.038447797298431396,
+        "n_p90_abs": 0.2807841897010803,
+        "n_p99_abs": 0.6655659079551697,
+        "n_r2": 0.7493972224877998,
+        "k_mae": 0.023812677711248398,
+        "k_p50_abs": 0.01322309672832489,
+        "k_p90_abs": 0.057845134288072586,
+        "k_p99_abs": 0.1437036246061325,
+        "k_r2": 0.9298341602265906,
+        "normalized_mae": 0.05114687979221344,
+        "overall_r2": 0.887430614338833
+      },
+      "nn_flag_rates": {
+        "bad_thickness": 0.18739,
+        "bad_n": 0.29995,
+        "bad_k": 0.13213,
+        "catastrophic": 0.13497,
+        "high_norm_error": 0.13959,
+        "thin_film": 0.1374,
+        "very_thin_film": 0.08596,
+        "low_fringe": 0.34027,
+        "ci_misses_thickness": 0.04317,
+        "ci_misses_n": 0.2411,
+        "ci_misses_k": 0.13148,
+        "ci_misses_any": 0.3136,
+        "good_spectrum_bad_params": 0.00701
+      },
+      "nn_risk_summary": {
+        "mean": 0.4400582015514374,
+        "p90": 0.6770488619804382,
+        "p99": 0.8507822751998901,
+        "fraction_over_0p7": 0.08399
+      },
+      "n_refined": 0,
+      "refined_metrics_on_selected": {},
+      "refiner_records_summary": {
+        "success_rate": null,
+        "mean_iterations": null,
+        "mean_improvement_pct": null,
+        "worsened_param_rate": null,
+        "improved_spectral_rate": null
+      }
+    },
+    {
+      "noise_std": 0.001,
+      "pipeline_label": "denoiser_nn",
+      "wall_time_s": 12.347571700000117,
+      "nn_time_s": 6.473633399999926,
+      "nn_metrics": {
+        "thickness_nm_mae": 6.590424537658691,
+        "thickness_nm_p50_abs": 4.166799545288086,
+        "thickness_nm_p90_abs": 14.140676498413086,
+        "thickness_nm_p99_abs": 42.434059143066406,
+        "thickness_nm_r2": 0.9830428050934624,
+        "n_mae": 0.09978220611810684,
+        "n_p50_abs": 0.03856849670410156,
+        "n_p90_abs": 0.28106817603111267,
+        "n_p99_abs": 0.665649950504303,
+        "n_r2": 0.749163023733144,
+        "k_mae": 0.023861149325966835,
+        "k_p50_abs": 0.013234183192253113,
+        "k_p90_abs": 0.057946424931287766,
+        "k_p99_abs": 0.14343547821044922,
+        "k_r2": 0.9295360771261629,
+        "normalized_mae": 0.051199909299612045,
+        "overall_r2": 0.8872473019842565
+      },
+      "nn_flag_rates": {
+        "bad_thickness": 0.18773,
+        "bad_n": 0.30027,
+        "bad_k": 0.13234,
+        "catastrophic": 0.13529,
+        "high_norm_error": 0.13993,
+        "thin_film": 0.1374,
+        "very_thin_film": 0.08596,
+        "low_fringe": 0.34027,
+        "ci_misses_thickness": 0.04333,
+        "ci_misses_n": 0.24127,
+        "ci_misses_k": 0.13144,
+        "ci_misses_any": 0.3135,
+        "good_spectrum_bad_params": 0.00658
+      },
+      "nn_risk_summary": {
+        "mean": 0.4401070177555084,
+        "p90": 0.6773601174354553,
+        "p99": 0.8509307503700256,
+        "fraction_over_0p7": 0.0842
+      },
+      "n_refined": 0,
+      "refined_metrics_on_selected": {},
+      "refiner_records_summary": {
+        "success_rate": null,
+        "mean_iterations": null,
+        "mean_improvement_pct": null,
+        "worsened_param_rate": null,
+        "improved_spectral_rate": null
+      }
+    },
+    {
+      "noise_std": 0.005,
+      "pipeline_label": "denoiser_nn",
+      "wall_time_s": 12.299447500000497,
+      "nn_time_s": 6.3918266000000585,
+      "nn_metrics": {
+        "thickness_nm_mae": 6.67417573928833,
+        "thickness_nm_p50_abs": 4.24874210357666,
+        "thickness_nm_p90_abs": 14.2864408493042,
+        "thickness_nm_p99_abs": 42.430335998535156,
+        "thickness_nm_r2": 0.9827597388811826,
+        "n_mae": 0.1010105088353157,
+        "n_p50_abs": 0.03943866491317749,
+        "n_p90_abs": 0.2838389277458191,
+        "n_p99_abs": 0.6671806573867798,
+        "n_r2": 0.7452746083634566,
+        "k_mae": 0.02478104457259178,
+        "k_p50_abs": 0.013917714357376099,
+        "k_p90_abs": 0.06016937643289566,
+        "k_p99_abs": 0.14867180585861206,
+        "k_r2": 0.9243149334929284,
+        "normalized_mae": 0.052250638604164124,
+        "overall_r2": 0.8841164269125225
+      },
+      "nn_flag_rates": {
+        "bad_thickness": 0.19223,
+        "bad_n": 0.30341,
+        "bad_k": 0.14004,
+        "catastrophic": 0.14123,
+        "high_norm_error": 0.14545,
+        "thin_film": 0.1374,
+        "very_thin_film": 0.08596,
+        "low_fringe": 0.34027,
+        "ci_misses_thickness": 0.04423,
+        "ci_misses_n": 0.24429,
+        "ci_misses_k": 0.1379,
+        "ci_misses_any": 0.31909,
+        "good_spectrum_bad_params": 0.0
+      },
+      "nn_risk_summary": {
+        "mean": 0.4406937062740326,
+        "p90": 0.6790992021560669,
+        "p99": 0.851913332939148,
+        "fraction_over_0p7": 0.08501
+      },
+      "n_refined": 0,
+      "refined_metrics_on_selected": {},
+      "refiner_records_summary": {
+        "success_rate": null,
+        "mean_iterations": null,
+        "mean_improvement_pct": null,
+        "worsened_param_rate": null,
+        "improved_spectral_rate": null
+      }
+    }
+  ],
+  "finished_at_unix": 1778126488.8344362
+}
